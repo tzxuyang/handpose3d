@@ -10,6 +10,8 @@ mp_hands = mp.solutions.hands
 frame_shape = [1300, 1600]
 HAND_LABELS = ('Left', 'Right')
 NUM_HAND_KEYPOINTS = 21
+BLUE = (255, 0, 0)
+RED = (0, 0, 255)
 
 
 def _empty_frame_keypoints(num_hands, point_dim):
@@ -133,12 +135,18 @@ def run_mp(input_stream1, input_stream2, P0, P1):
         frame1 = cv.cvtColor(frame1, cv.COLOR_RGB2BGR)
 
         if results0.multi_hand_landmarks:
-          for hand_landmarks in results0.multi_hand_landmarks:
-            mp_drawing.draw_landmarks(frame0, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+          for i, hand_landmarks in enumerate(results0.multi_hand_landmarks):
+            if i == 0:
+                mp_drawing.draw_landmarks(frame0, hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
+            else:
+                mp_drawing.draw_landmarks(frame0, hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
 
         if results1.multi_hand_landmarks:
-          for hand_landmarks in results1.multi_hand_landmarks:
-            mp_drawing.draw_landmarks(frame1, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+          for i, hand_landmarks in enumerate(results1.multi_hand_landmarks):
+            if i == 0:
+                mp_drawing.draw_landmarks(frame1, hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
+            else:
+                mp_drawing.draw_landmarks(frame1, hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
         cv.imshow('cam1', frame1)
         cv.imshow('cam0', frame0)
 

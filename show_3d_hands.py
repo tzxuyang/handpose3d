@@ -66,17 +66,17 @@ def visualize_3d(p3ds):
     ring_f = [[0,13],[13,14],[14,15],[15,16]]
     pinkie_f = [[0,17],[17,18],[18,19],[19,20]]
     fingers = [pinkie_f, ring_f, middle_f, index_f, thumb_f]
-    fingers_colors = ['red', 'blue', 'green', 'black', 'orange']
+    fingers_colors = ['blue', 'blue', 'blue', 'blue', 'blue']
 
     from mpl_toolkits.mplot3d import Axes3D
 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
+    ax.view_init(elev=60, azim=0)
 
     for i, frame_hands in enumerate(p3ds_rotated):
         if i%2 == 0: continue #skip every 2nd frame
         for hand_kpts in frame_hands:
-            print(hand_kpts)
             if np.all(hand_kpts[:, 0] == -1):
                 continue
 
@@ -92,31 +92,29 @@ def visualize_3d(p3ds):
                         linewidth=4,
                         c=finger_color,
                     )
+                    ax.set_box_aspect([1, 1, 1])
 
         #draw axes
-        ax.plot(xs = [0,5], ys = [0,0], zs = [0,0], linewidth = 2, color = 'red')
-        ax.plot(xs = [0,0], ys = [0,5], zs = [0,0], linewidth = 2, color = 'blue')
-        ax.plot(xs = [0,0], ys = [0,0], zs = [0,5], linewidth = 2, color = 'black')
+        ax.plot(xs = [0,1], ys = [0,0], zs = [0,0], linewidth = 2, color = 'red')
+        ax.plot(xs = [0,0], ys = [0,1], zs = [0,0], linewidth = 2, color = 'blue')
+        ax.plot(xs = [0,0], ys = [0,0], zs = [0,1], linewidth = 2, color = 'black')
 
         #ax.set_axis_off()
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_zticks([])
 
-        ax.set_xlim3d(-5000, 5000)
+        ax.set_xlim3d(0, 0.1)
         ax.set_xlabel('x')
-        ax.set_ylim3d(-5000, 5000)
+        ax.set_ylim3d(-0.05, 0.1)
         ax.set_ylabel('y')
-        ax.set_zlim3d(-5000, 5000)
+        ax.set_zlim3d(-0.05, 0.1)
         ax.set_zlabel('z')
-        ax.elev = 0.2*i
-        ax.azim = 0.2*i
-        plt.savefig(output_dir / f'fig_{i}.png')
+        # plt.savefig(output_dir / f'fig_{i}.png')
         plt.pause(0.01)
         ax.cla()
 
 
 if __name__ == '__main__':
-
     p3ds = read_keypoints('kpts_3d.dat')
     visualize_3d(p3ds)

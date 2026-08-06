@@ -1,5 +1,12 @@
 import numpy as np
 
+def quat_to_rot_matrix(qx, qy, qz, qw):
+    # Assumes qx, qy, qz, qw is normalized
+    return [
+        [1 - 2*(qy**2 + qz**2),  2*(qx*qy - qz*qw),      2*(qx*qz + qy*qw)],
+        [2*(qx*qy + qz*qw),      1 - 2*(qx**2 + qz**2),  2*(qy*qz - qx*qw)],
+        [2*(qx*qz - qy*qw),      2*(qy*qz + qx*qw),      1 - 2*(qx**2 + qy**2)]
+    ]
 
 def _make_homogeneous_rep_matrix(R, t):
     P = np.zeros((4,4))
