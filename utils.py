@@ -88,17 +88,13 @@ def get_projection_matrix(camera_id):
     return P
 
 def write_keypoints_to_disk(filename, kpts):
-    fout = open(filename, 'w')
-
-    for frame_kpts in kpts:
-        for kpt in frame_kpts:
-            if len(kpt) == 2:
-                fout.write(str(kpt[0]) + ' ' + str(kpt[1]) + ' ')
-            else:
-                fout.write(str(kpt[0]) + ' ' + str(kpt[1]) + ' ' + str(kpt[2]) + ' ')
-
-        fout.write('\n')
-    fout.close()
+    with open(filename, 'w') as fout:
+        for frame_kpts in kpts:
+            frame_kpts = np.asarray(frame_kpts)
+            frame_kpts = frame_kpts.reshape((-1, frame_kpts.shape[-1]))
+            for kpt in frame_kpts:
+                fout.write(' '.join(str(value) for value in kpt) + ' ')
+            fout.write('\n')
 
 if __name__ == '__main__':
 

@@ -1,0 +1,9 @@
+[project]
+name = "handpose"
+version = "0.0.0"
+description = "3D handpose annotation"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "matplotlib>=3.10.9",
+    "mediapipe==0.10.14",
+]

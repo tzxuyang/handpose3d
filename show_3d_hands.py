@@ -1,26 +1,41 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from pathlib import Path
 from utils import DLT
 
-def read_keypoints(filename):
-    fin = open(filename, 'r')
+NUM_HAND_KEYPOINTS = 21
 
-    kpts = []
-    while(True):
-        line = fin.readline()
-        if line == '': break
 
-        line = line.split()
-        line = [float(s) for s in line]
+def read_keypoints(filename, point_dim=3):
+    with open(filename, 'r') as fin:
+        kpts = []
+        while True:
+            line = fin.readline()
+            if line == '':
+                break
 
-        line = np.reshape(line, (21, -1))
-        kpts.append(line)
+            line = line.split()
+            if not line:
+                continue
 
-    kpts = np.array(kpts)
-    return kpts
+            line = [float(s) for s in line]
+            values_per_hand = NUM_HAND_KEYPOINTS * point_dim
+            if len(line) % values_per_hand != 0:
+                raise ValueError(
+                    f'Could not reshape {filename}: each frame must contain a multiple of '
+                    f'{values_per_hand} values for {point_dim}D hand keypoints.'
+                )
+
+            num_hands = len(line) // values_per_hand
+            line = np.reshape(line, (num_hands, NUM_HAND_KEYPOINTS, point_dim))
+            kpts.append(line)
+
+    return np.array(kpts)
 
 
 def visualize_3d(p3ds):
+    output_dir = Path('figs')
+    output_dir.mkdir(exist_ok=True)
 
     """Apply coordinate rotations to point z axis as up"""
     Rz = np.array(([[0., -1., 0.],
@@ -31,11 +46,14 @@ def visualize_3d(p3ds):
                     [0.,  0., -1.]]))
 
     p3ds_rotated = []
+    rotation = Rz @ Rx
     for frame in p3ds:
         frame_kpts_rotated = []
-        for kpt in frame:
-            kpt_rotated = Rz @ Rx @ kpt
-            frame_kpts_rotated.append(kpt_rotated)
+        for hand_kpts in frame:
+            hand_kpts_rotated = []
+            for kpt in hand_kpts:
+                hand_kpts_rotated.append(rotation @ kpt)
+            frame_kpts_rotated.append(hand_kpts_rotated)
         p3ds_rotated.append(frame_kpts_rotated)
 
     """this contains 3d points of each frame"""
@@ -55,11 +73,25 @@ def visualize_3d(p3ds):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
-    for i, kpts3d in enumerate(p3ds_rotated):
+    for i, frame_hands in enumerate(p3ds_rotated):
         if i%2 == 0: continue #skip every 2nd frame
-        for finger, finger_color in zip(fingers, fingers_colors):
-            for _c in finger:
-                ax.plot(xs = [kpts3d[_c[0],0], kpts3d[_c[1],0]], ys = [kpts3d[_c[0],1], kpts3d[_c[1],1]], zs = [kpts3d[_c[0],2], kpts3d[_c[1],2]], linewidth = 4, c = finger_color)
+        for hand_kpts in frame_hands:
+            print(hand_kpts)
+            if np.all(hand_kpts[:, 0] == -1):
+                continue
+
+            for finger, finger_color in zip(fingers, fingers_colors):
+                for _c in finger:
+                    if np.any(hand_kpts[_c[0]] == -1) or np.any(hand_kpts[_c[1]] == -1):
+                        continue
+
+                    ax.plot(
+                        xs=[hand_kpts[_c[0], 0], hand_kpts[_c[1], 0]],
+                        ys=[hand_kpts[_c[0], 1], hand_kpts[_c[1], 1]],
+                        zs=[hand_kpts[_c[0], 2], hand_kpts[_c[1], 2]],
+                        linewidth=4,
+                        c=finger_color,
+                    )
 
         #draw axes
         ax.plot(xs = [0,5], ys = [0,0], zs = [0,0], linewidth = 2, color = 'red')
@@ -71,15 +103,15 @@ def visualize_3d(p3ds):
         ax.set_yticks([])
         ax.set_zticks([])
 
-        ax.set_xlim3d(-7, 8)
+        ax.set_xlim3d(-5000, 5000)
         ax.set_xlabel('x')
-        ax.set_ylim3d(-7, 8)
+        ax.set_ylim3d(-5000, 5000)
         ax.set_ylabel('y')
-        ax.set_zlim3d(0, 15)
+        ax.set_zlim3d(-5000, 5000)
         ax.set_zlabel('z')
         ax.elev = 0.2*i
         ax.azim = 0.2*i
-        plt.savefig('figs/fig_' + str(i) + '.png')
+        plt.savefig(output_dir / f'fig_{i}.png')
         plt.pause(0.01)
         ax.cla()
 

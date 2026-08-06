@@ -7,7 +7,50 @@ from utils import DLT, get_projection_matrix, write_keypoints_to_disk
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
 
-frame_shape = [720, 1280]
+frame_shape = [1300, 1600]
+HAND_LABELS = ('Left', 'Right')
+NUM_HAND_KEYPOINTS = 21
+
+
+def _empty_frame_keypoints(num_hands, point_dim):
+    return [[[-1] * point_dim for _ in range(NUM_HAND_KEYPOINTS)] for _ in range(num_hands)]
+
+
+def _get_hand_slot(results, detected_index, filled_slots):
+    if results.multi_handedness and detected_index < len(results.multi_handedness):
+        label = results.multi_handedness[detected_index].classification[0].label
+        if label in HAND_LABELS:
+            preferred_slot = HAND_LABELS.index(label)
+            if preferred_slot not in filled_slots:
+                return preferred_slot
+
+    for slot in range(len(HAND_LABELS)):
+        if slot not in filled_slots:
+            return slot
+
+    return None
+
+
+def _extract_frame_keypoints(results, frame, point_dim):
+    frame_keypoints = _empty_frame_keypoints(len(HAND_LABELS), point_dim)
+
+    if not results.multi_hand_landmarks:
+        return frame_keypoints
+
+    filled_slots = set()
+    for detected_index, hand_landmarks in enumerate(results.multi_hand_landmarks):
+        hand_slot = _get_hand_slot(results, detected_index, filled_slots)
+        if hand_slot is None:
+            continue
+
+        filled_slots.add(hand_slot)
+        for p in range(NUM_HAND_KEYPOINTS):
+            pxl_x = int(round(frame.shape[1] * hand_landmarks.landmark[p].x))
+            pxl_y = int(round(frame.shape[0] * hand_landmarks.landmark[p].y))
+            frame_keypoints[hand_slot][p] = [pxl_x, pxl_y]
+
+    return frame_keypoints
+
 
 def run_mp(input_stream1, input_stream2, P0, P1):
     #input video stream
@@ -21,8 +64,8 @@ def run_mp(input_stream1, input_stream2, P0, P1):
         cap.set(4, frame_shape[0])
 
     #create hand keypoints detector object.
-    hands0 = mp_hands.Hands(min_detection_confidence=0.5, max_num_hands =1, min_tracking_confidence=0.5)
-    hands1 = mp_hands.Hands(min_detection_confidence=0.5, max_num_hands =1, min_tracking_confidence=0.5)
+    hands0 = mp_hands.Hands(min_detection_confidence=0.5, max_num_hands=2, min_tracking_confidence=0.5)
+    hands1 = mp_hands.Hands(min_detection_confidence=0.5, max_num_hands=2, min_tracking_confidence=0.5)
 
     #containers for detected keypoints for each camera
     kpts_cam0 = []
@@ -55,56 +98,32 @@ def run_mp(input_stream1, input_stream2, P0, P1):
 
         #prepare list of hand keypoints of this frame
         #frame0 kpts
-        frame0_keypoints = []
-        if results0.multi_hand_landmarks:
-            for hand_landmarks in results0.multi_hand_landmarks:
-                for p in range(21):
-                    #print(p, ':', hand_landmarks.landmark[p].x, hand_landmarks.landmark[p].y)
-                    pxl_x = int(round(frame0.shape[1]*hand_landmarks.landmark[p].x))
-                    pxl_y = int(round(frame0.shape[0]*hand_landmarks.landmark[p].y))
-                    kpts = [pxl_x, pxl_y]
-                    frame0_keypoints.append(kpts)
-
-        #no keypoints found in frame:
-        else:
-            #if no keypoints are found, simply fill the frame data with [-1,-1] for each kpt
-            frame0_keypoints = [[-1, -1]]*21
-
+        frame0_keypoints = _extract_frame_keypoints(results0, frame0, point_dim=2)
         kpts_cam0.append(frame0_keypoints)
 
         #frame1 kpts
-        frame1_keypoints = []
-        if results1.multi_hand_landmarks:
-            for hand_landmarks in results1.multi_hand_landmarks:
-                for p in range(21):
-                    #print(p, ':', hand_landmarks.landmark[p].x, hand_landmarks.landmark[p].y)
-                    pxl_x = int(round(frame1.shape[1]*hand_landmarks.landmark[p].x))
-                    pxl_y = int(round(frame1.shape[0]*hand_landmarks.landmark[p].y))
-                    kpts = [pxl_x, pxl_y]
-                    frame1_keypoints.append(kpts)
-
-        else:
-            #if no keypoints are found, simply fill the frame data with [-1,-1] for each kpt
-            frame1_keypoints = [[-1, -1]]*21
-
+        frame1_keypoints = _extract_frame_keypoints(results1, frame1, point_dim=2)
         #update keypoints container
         kpts_cam1.append(frame1_keypoints)
 
 
         #calculate 3d position
         frame_p3ds = []
-        for uv1, uv2 in zip(frame0_keypoints, frame1_keypoints):
-            if uv1[0] == -1 or uv2[0] == -1:
-                _p3d = [-1, -1, -1]
-            else:
-                _p3d = DLT(P0, P1, uv1, uv2) #calculate 3d position of keypoint
-            frame_p3ds.append(_p3d)
+        for hand0_keypoints, hand1_keypoints in zip(frame0_keypoints, frame1_keypoints):
+            hand_p3ds = []
+            for uv1, uv2 in zip(hand0_keypoints, hand1_keypoints):
+                if uv1[0] == -1 or uv2[0] == -1:
+                    _p3d = [-1, -1, -1]
+                else:
+                    _p3d = DLT(P0, P1, uv1, uv2) #calculate 3d position of keypoint
+                hand_p3ds.append(_p3d)
+            frame_p3ds.append(hand_p3ds)
 
         '''
         This contains the 3d position of each keypoint in current frame.
         For real time application, this is what you want.
         '''
-        frame_p3ds = np.array(frame_p3ds).reshape((21, 3))
+        frame_p3ds = np.array(frame_p3ds).reshape((len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3))
         kpts_3d.append(frame_p3ds)
 
         # Draw the hand annotations on the image.
@@ -135,8 +154,8 @@ def run_mp(input_stream1, input_stream2, P0, P1):
 
 if __name__ == '__main__':
 
-    input_stream1 = 'media/cam0_test.mp4'
-    input_stream2 = 'media/cam1_test.mp4'
+    input_stream1 = 'media/camera1.mp4'
+    input_stream2 = 'media/camera4.mp4'
 
     if len(sys.argv) == 3:
         input_stream1 = int(sys.argv[1])
@@ -149,6 +168,6 @@ if __name__ == '__main__':
     kpts_cam0, kpts_cam1, kpts_3d = run_mp(input_stream1, input_stream2, P0, P1)
 
     #this will create keypoints file in current working folder
-    #write_keypoints_to_disk('kpts_cam0.dat', kpts_cam0)
-    #write_keypoints_to_disk('kpts_cam1.dat', kpts_cam1)
-    #write_keypoints_to_disk('kpts_3d.dat', kpts_3d)
+    write_keypoints_to_disk('kpts_cam0.dat', kpts_cam0)
+    write_keypoints_to_disk('kpts_cam1.dat', kpts_cam1)
+    write_keypoints_to_disk('kpts_3d.dat', kpts_3d)
