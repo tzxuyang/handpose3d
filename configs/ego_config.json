@@ -1,0 +1,11 @@
+{
+    "camera_topics": [
+        "/robot0/sensor/camera1/compressed",
+        "/robot0/sensor/camera4/compressed"
+    ],
+    "camera_info": [
+        "/robot0/sensor/camera1/camera_info",
+        "/robot0/sensor/camera4/camera_info"
+    ]
+    
+}
