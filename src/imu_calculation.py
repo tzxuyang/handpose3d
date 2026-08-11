@@ -279,7 +279,7 @@ if __name__ == "__main__":
     from readmcap import read_mcap_protobuf
     from utils import msg_time_sync
 
-    mcap_path = "/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap"
+    mcap_path = "/Users/yangxu/Documents/Code/ff9e3e1189504041b9ce21256925377f.mcap"
     json_path = "./configs/ego_config.json"
 
     with open(json_path, "r") as f:

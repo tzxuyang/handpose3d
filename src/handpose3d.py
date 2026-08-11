@@ -2,7 +2,10 @@ import cv2 as cv
 import mediapipe as mp
 import numpy as np
 import sys
-from utils import DLT, get_projection_matrix, write_keypoints_to_disk
+from extract_mcap import read_mcap_protobuf
+from extract_mcap import read_mcap_protobuf
+from imu_calculation import calculate_position_from_imu
+from utils import DLT, get_projection_matrix, msg_time_sync, write_keypoints_to_disk
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -160,25 +163,38 @@ def run_mp(input_stream1, input_stream2, P0, P1):
 
     return np.array(kpts_cam0), np.array(kpts_cam1), np.array(kpts_3d)
 
-if __name__ == '__main__':
-
-    input_stream1 = 'media/camera1.mp4'
-    input_stream2 = 'media/camera4.mp4'
-
-    if len(sys.argv) == 3:
-        input_stream1 = int(sys.argv[1])
-        input_stream2 = int(sys.argv[2])
-
+def handpose3d(stream1, stream2, imu_pts=None):
+    input_stream1 = stream1
+    input_stream2 = stream2
+    
     #projection matrices
     P0 = get_projection_matrix(0)
     P1 = get_projection_matrix(1)
-
+    
     kpts_cam0, kpts_cam1, kpts_3d = run_mp(input_stream1, input_stream2, P0, P1)
 
-    for pts_3d in kpts_3d:
-        print(pts_3d)
-        print("-------------------------------")
+    if imu_pts is not None:
+        for kpts, imu_pts in zip(kpts_3d, imu_pts):
+            for hand_kpts, imu_pt in zip(kpts, imu_pts):
+                for kpt in hand_kpts:
+                    if kpt[0] != -1:
+                        kpt += imu_pt
+                        
     #this will create keypoints file in current working folder
     write_keypoints_to_disk('kpts_cam0.dat', kpts_cam0)
     write_keypoints_to_disk('kpts_cam1.dat', kpts_cam1)
     write_keypoints_to_disk('kpts_3d.dat', kpts_3d)
+
+if __name__ == '__main__':
+
+    input_stream1 = 'media/camera1.mp4'
+    input_stream2 = 'media/camera4.mp4'
+    mcap_path = '/Users/yangxu/Documents/Code/ff9e3e1189504041b9ce21256925377f.mcap'
+    imu_topic = '/robot0/sensor/imu'
+    video_topics = ['/robot0/sensor/camera1/camera_info', '/robot0/sensor/camera4/camera_info']
+
+    msg_imu = read_mcap_protobuf(mcap_path, imu_topic)
+    msg_cam = read_mcap_protobuf(mcap_path, video_topics[0])
+    msg_imu_synced = msg_time_sync(msg_cam, msg_imu)
+    imu_pts = calculate_position_from_imu(msg_imu_synced)
+    handpose3d(input_stream1, input_stream2, imu_pts)
