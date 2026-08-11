@@ -1,6 +1,7 @@
-from extract_mcap import extract_video, read_mcap_topics, read_mcap_protobuf
-from utils import write_extrinsic_parameters, write_instrinsic_parameters, quat_to_rot_matrix
+from extract_mcap import extract_video, read_mcap_topics, read_mcap_protobuf, read_mcap_protobuf_once
+from utils import write_extrinsic_parameters, write_instrinsic_parameters, quat_to_rot_matrix, msg_time_sync
 import json
+from matplotlib import pyplot as plt
 
 json_path = "./configs/ego_config.json"
 mcap_path = "/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap"
@@ -15,13 +16,14 @@ if __name__ == "__main__":
         config = json.load(f)
         video_topics = config.get("camera_topics")
         cam_info = config.get("camera_info")
+        imu_topic = config.get("imu_topic")
 
     # Extract video from MCAP file
     extract_video(mcap_path, video_topics, output_mp4, fps=30, keep_h264=False)
 
     # Extract camera parameters from MCAP file
-    msg_cam0 = read_mcap_protobuf(mcap_path, [cam_info[0]])
-    msg_cam1 = read_mcap_protobuf(mcap_path, [cam_info[1]])
+    msg_cam0 = read_mcap_protobuf_once(mcap_path, [cam_info[0]])
+    msg_cam1 = read_mcap_protobuf_once(mcap_path, [cam_info[1]])
 
     width, height = msg_cam0.width, msg_cam0.height
     K0 = msg_cam0.K
@@ -38,3 +40,26 @@ if __name__ == "__main__":
     write_instrinsic_parameters("./camera_parameters/c1.dat", K1, distortion)
     write_extrinsic_parameters("./camera_parameters/rot_trans_c0.dat", R0, T0)
     write_extrinsic_parameters("./camera_parameters/rot_trans_c1.dat", R1, T1)
+
+    # Read IMU data
+    msg_cam = read_mcap_protobuf(mcap_path, video_topics[0])
+    msg_imu = read_mcap_protobuf(mcap_path, imu_topic)
+    print(f"IMU data extracted: {len(msg_imu)}")
+    print(f"First IMU message: {msg_imu[0]['header']['timestamp'] if msg_imu else 'No IMU data found'}")
+    # print("-------------------------------")
+    # print(f"First IMU message: {msg_imu[0]['linear_acceleration']['x']}")
+    msg_imu_synced = msg_time_sync(msg_cam, msg_imu)
+    print(f"IMU data after synchronization: {len(msg_imu_synced)}")
+
+    time_raw = []
+    x_accel_raw = []
+    time_sync = []
+    x_accel_sync = []
+    for msg in msg_imu:
+        time_raw.append(msg['header']['timestamp'])
+        x_accel_raw.append(msg['linear_acceleration']['x'])
+    for msg in msg_imu_synced:
+        time_sync.append(msg['header']['timestamp'])
+        x_accel_sync.append(msg['linear_acceleration']['x'])
+
+    print("Task done")

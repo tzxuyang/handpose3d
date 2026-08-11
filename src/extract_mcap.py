@@ -26,8 +26,9 @@ import subprocess
 from mcap.reader import make_reader
 from mcap_ros2.reader import read_ros2_messages
 from mcap_protobuf.decoder import DecoderFactory
+from google.protobuf.json_format import MessageToDict
 
-def read_mcap_protobuf(mcap_path, topics=None):
+def read_mcap_protobuf_once(mcap_path, topics=None):
     with open(mcap_path, "rb") as f:
         # Pass DecoderFactory to automatically unpack Protobuf schemas
         reader = make_reader(f, decoder_factories=[DecoderFactory()])
@@ -37,6 +38,28 @@ def read_mcap_protobuf(mcap_path, topics=None):
             # proto_msg is a fully hydrated Python Protobuf object
             return proto_msg  # You can process or print the proto_msg as needed
 
+def read_mcap_protobuf(mcap_path, topics=None):
+    messages_dict = []
+    with open(mcap_path, "rb") as f:
+        # Pass DecoderFactory to automatically unpack Protobuf schemas
+        reader = make_reader(f, decoder_factories=[DecoderFactory()])
+        
+        # Iterate over all messages across all topics
+        for schema, channel, message, proto_msg in reader.iter_decoded_messages(topics=topics):            
+            # proto_msg is a fully hydrated Python Protobuf object
+            if proto_msg is None:
+                continue
+                
+            # Convert the Protobuf object to a standard Python dictionary
+            msg_dict = MessageToDict(
+                proto_msg,
+                preserving_proto_field_name=True  # Keeps original .proto snake_case names
+            )
+                         
+            messages_dict.append(msg_dict)
+            
+    return messages_dict
+        
 def read_mcap_topics(mcap_path, topics=None):
     with open(mcap_path, "rb") as f:
         reader = make_reader(f)

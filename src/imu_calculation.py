@@ -2,32 +2,13 @@ import copy
 
 import numpy as np
 
-def msg_time_sync(ref_msg, target_msg):
-    """
-    Synchronize the target message to the reference message based on timestamps.
-    Args:
-        ref_msg: The reference message with a timestamp.
-        target_msg: The target message to be synchronized.
-    Returns:
-        The synchronized target message.
-    """
-    output_msg = []
-    target_index = 0
 
-    for msg in ref_msg:
-        ref_time = msg['header']['timestamp']
-
-        for idx in range(target_index, len(target_msg)):
-            target_time = target_msg[idx]['header']['timestamp']
-            # If the target time is greater than the reference time, break the loop
-            if target_time >= ref_time:
-                target_index = idx  # Update the target index for the next iteration
-                break
-            
-        # If the target time is less than or equal to the reference time, update the output message
-        output_msg.append(target_msg[target_index])
-        
-    return output_msg   
+def _get_linear_acceleration(message):
+    if "linear_acceleration" in message:
+        return message["linear_acceleration"]
+    if "linear_acceleraion" in message:
+        return message["linear_acceleraion"]
+    raise KeyError("IMU message must contain 'linear_acceleration' (or legacy 'linear_acceleraion').")
 
 
 def _parse_timestamp(timestamp):
@@ -74,15 +55,16 @@ def _extract_imu_arrays(imu_data, timestamps=None):
     extracted_timestamps = [] if timestamps is None else timestamps
 
     for message in messages:
+        linear_acceleration = _get_linear_acceleration(message)
         gyro.append([
             float(message["angular_velocity"]["x"]),
             float(message["angular_velocity"]["y"]),
             float(message["angular_velocity"]["z"]),
         ])
         accel.append([
-            float(message["linear_acceleration"]["x"]),
-            float(message["linear_acceleration"]["y"]),
-            float(message["linear_acceleration"]["z"]),
+            float(linear_acceleration["x"]),
+            float(linear_acceleration["y"]),
+            float(linear_acceleration["z"]),
         ])
         if timestamps is None:
             extracted_timestamps.append(message["header"]["timestamp"])
@@ -111,6 +93,44 @@ def _compute_dt(sample_count, timestamps=None, sample_rate=None):
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive.")
     return np.full(sample_count - 1, 1.0 / float(sample_rate), dtype=float)
+
+
+def _compute_sample_times(sample_count, timestamps=None, sample_rate=None):
+    if sample_count == 0:
+        return np.zeros(0, dtype=float)
+
+    if timestamps is not None:
+        sample_times = np.asarray(timestamps, dtype=float)
+    else:
+        if sample_rate is None:
+            sample_rate = 1.0
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be positive.")
+        sample_times = np.arange(sample_count, dtype=float) / float(sample_rate)
+
+    return sample_times - sample_times[0]
+
+
+def _subtract_moving_average(signal, sample_times, window_seconds):
+    if window_seconds <= 0:
+        raise ValueError("bias_window_seconds must be positive.")
+    if len(signal) == 0:
+        return signal.copy()
+
+    corrected_signal = np.zeros_like(signal)
+    prefix_sum = np.vstack([np.zeros((1, signal.shape[1])), np.cumsum(signal, axis=0)])
+    start_index = 0
+
+    for index in range(len(signal)):
+        cutoff_time = sample_times[index] - window_seconds
+        while start_index < index and sample_times[start_index] < cutoff_time:
+            start_index += 1
+
+        window_count = index - start_index + 1
+        window_sum = prefix_sum[index + 1] - prefix_sum[start_index]
+        corrected_signal[index] = signal[index] - window_sum / window_count
+
+    return corrected_signal
 
 
 def _skew_symmetric(vector):
@@ -156,6 +176,11 @@ def subtract_gravity_from_imu(imu_data, timestamps=None, sample_rate=None, gravi
     """
     Remove gravity from IMU samples.
 
+    Supports IMU messages with:
+    - message["header"]["timestamp"]
+    - message["angular_velocity"]["x"|"y"|"z"]
+    - message["linear_acceleration"]["x"|"y"|"z"]
+
     Assumes the IMU starts with its +z axis aligned with gravity and integrates
     the angular velocity to keep track of the gravity direction in sensor frame.
     """
@@ -175,19 +200,29 @@ def subtract_gravity_from_imu(imu_data, timestamps=None, sample_rate=None, gravi
 
     output_messages = copy.deepcopy(imu_source)
     for message, corrected_accel in zip(output_messages, linear_accel_sensor):
-        message["linear_acceleration"]["x"] = float(corrected_accel[0])
-        message["linear_acceleration"]["y"] = float(corrected_accel[1])
-        message["linear_acceleration"]["z"] = float(corrected_accel[2])
+        linear_acceleration = _get_linear_acceleration(message)
+        linear_acceleration["x"] = float(corrected_accel[0])
+        linear_acceleration["y"] = float(corrected_accel[1])
+        linear_acceleration["z"] = float(corrected_accel[2])
     return output_messages
 
 
-def calculate_position_from_imu(imu_data, timestamps=None, sample_rate=None, gravity_magnitude=1.0):
+def calculate_position_from_imu(
+    imu_data,
+    timestamps=None,
+    sample_rate=None,
+    gravity_magnitude=1.0,
+    bias_window_seconds=3.5,
+):
     """
     Estimate a relative (x, y, z) trajectory from IMU data.
 
+    Supports the IMU message dictionary format used by this repository.
+
     Gravity is removed first, the remaining acceleration is rotated into the
-    world frame, a constant acceleration bias is removed, and the trajectory is
-    recentered so the average position stays close to zero.
+    world frame, then moving-average drift compensation is applied to both the
+    integrated velocity and the integrated position over a past-time window.
+    The returned trajectory always starts at (0, 0, 0).
     """
     gyro, accel, extracted_timestamps, _ = _extract_imu_arrays(imu_data, timestamps=timestamps)
     active_timestamps = extracted_timestamps if timestamps is None else _normalize_timestamps(timestamps)
@@ -203,147 +238,76 @@ def calculate_position_from_imu(imu_data, timestamps=None, sample_rate=None, gra
     if len(linear_accel_world) == 0:
         return linear_accel_world
 
-    linear_accel_world = linear_accel_world - linear_accel_world.mean(axis=0, keepdims=True)
     dt = _compute_dt(len(linear_accel_world), timestamps=active_timestamps, sample_rate=sample_rate)
+    sample_times = _compute_sample_times(
+        len(linear_accel_world),
+        timestamps=active_timestamps,
+        sample_rate=sample_rate,
+    )
 
     velocity = np.zeros_like(linear_accel_world)
-    position = np.zeros_like(linear_accel_world)
+    true_accel_world = np.zeros_like(linear_accel_world)
+
     for index in range(1, len(linear_accel_world)):
+        bias = np.mean(linear_accel_world[max(0, index - int(bias_window_seconds / dt[index - 1])):index], axis=0)
+        true_accel_world[index] = linear_accel_world[index] - bias
+
+    for index in range(1, len(linear_accel_world)): 
         step = dt[index - 1]
         velocity[index] = velocity[index - 1] + 0.5 * (
-            linear_accel_world[index - 1] + linear_accel_world[index]
-        ) * step
-        position[index] = position[index - 1] + 0.5 * (
-            velocity[index - 1] + velocity[index]
+            true_accel_world[index - 1] + true_accel_world[index]
         ) * step
 
-    position = position - position.mean(axis=0, keepdims=True)
+    position = np.zeros_like(linear_accel_world)
+    true_velocity = np.zeros_like(linear_accel_world)
+    for index in range(1, len(velocity)):
+        bias = np.mean(velocity[max(0, index - int(bias_window_seconds / dt[index - 1])):index], axis=0)
+        true_velocity[index] = velocity[index] - bias
+
+    for index in range(1, len(velocity)):
+        step = dt[index - 1]
+        position[index] = position[index - 1] + 0.5 * (
+            true_velocity[index - 1] + true_velocity[index]
+        ) * step
+
+    # position = position - position[0]
     return position
 
-def quat_to_rot_matrix(qx, qy, qz, qw):
-    # Assumes qx, qy, qz, qw is normalized
-    return [
-        [1 - 2*(qy**2 + qz**2),  2*(qx*qy - qz*qw),      2*(qx*qz + qy*qw)],
-        [2*(qx*qy + qz*qw),      1 - 2*(qx**2 + qz**2),  2*(qy*qz - qx*qw)],
-        [2*(qx*qz - qy*qw),      2*(qy*qz + qx*qw),      1 - 2*(qx**2 + qy**2)]
-    ]
+if __name__ == "__main__":
+    import json
+    from matplotlib import pyplot as plt
+    from readmcap import read_mcap_protobuf
+    from utils import msg_time_sync
 
-def _make_homogeneous_rep_matrix(R, t):
-    P = np.zeros((4,4))
-    P[:3,:3] = R
-    P[:3, 3] = t.reshape(3)
-    P[3,3] = 1
-    return P
+    mcap_path = "/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap"
+    json_path = "./configs/ego_config.json"
 
-#direct linear transform
-def DLT(P1, P2, point1, point2):
+    with open(json_path, "r") as f:
+        config = json.load(f)
+        imu_topic = config.get("imu_topic")
+        video_topics = config.get("camera_topics")
 
-    A = [point1[1]*P1[2,:] - P1[1,:],
-         P1[0,:] - point1[0]*P1[2,:],
-         point2[1]*P2[2,:] - P2[1,:],
-         P2[0,:] - point2[0]*P2[2,:]
-        ]
-    A = np.array(A).reshape((4,4))
-    #print('A: ')
-    #print(A)
+    msg_imu = read_mcap_protobuf(mcap_path, imu_topic)
+    msg_cam = read_mcap_protobuf(mcap_path, video_topics[0])
+    msg_imu_synced = msg_time_sync(msg_cam, msg_imu)
+    position = calculate_position_from_imu(msg_imu_synced)
+    print(f"Estimated position shape: {position.shape}")
+    x_list = []
+    y_list = []
+    z_list = []
+    for pos in position:
+        x_list.append(pos[0])
+        y_list.append(pos[1])
+        z_list.append(pos[2])
 
-    B = A.transpose() @ A
-    from scipy import linalg
-    U, s, Vh = linalg.svd(B, full_matrices = False)
+    plt.figure(figsize=(12, 6))
+    plt.plot(x_list, label='X Position', color='blue')
+    plt.plot(y_list, label='Y Position', color='orange')
+    plt.plot(z_list, label='Z Position', color='green')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Position')
+    plt.title('Estimated Position from IMU Data')
+    plt.legend()
+    plt.show()
 
-    #print('Triangulated point: ')
-    #print(Vh[3,0:3]/Vh[3,3])
-    return Vh[3,0:3]/Vh[3,3]
-
-def read_camera_parameters(camera_id):
-
-    inf = open('camera_parameters/c' + str(camera_id) + '.dat', 'r')
-
-    cmtx = []
-    dist = []
-
-    line = inf.readline()
-    for _ in range(3):
-        line = inf.readline().split()
-        line = [float(en) for en in line]
-        cmtx.append(line)
-
-    line = inf.readline()
-    line = inf.readline().split()
-    line = [float(en) for en in line]
-    dist.append(line)
-
-    return np.array(cmtx), np.array(dist)
-
-def read_rotation_translation(camera_id, savefolder = 'camera_parameters/'):
-
-    inf = open(savefolder + 'rot_trans_c'+ str(camera_id) + '.dat', 'r')
-
-    inf.readline()
-    rot = []
-    trans = []
-    for _ in range(3):
-        line = inf.readline().split()
-        line = [float(en) for en in line]
-        rot.append(line)
-
-    inf.readline()
-    for _ in range(3):
-        line = inf.readline().split()
-        line = [float(en) for en in line]
-        trans.append(line)
-
-    inf.close()
-    return np.array(rot), np.array(trans)
-
-def _convert_to_homogeneous(pts):
-    pts = np.array(pts)
-    if len(pts.shape) > 1:
-        w = np.ones((pts.shape[0], 1))
-        return np.concatenate([pts, w], axis = 1)
-    else:
-        return np.concatenate([pts, [1]], axis = 0)
-
-def get_projection_matrix(camera_id):
-
-    #read camera parameters
-    cmtx, dist = read_camera_parameters(camera_id)
-    rvec, tvec = read_rotation_translation(camera_id)
-
-    #calculate projection matrix
-    P = cmtx @ _make_homogeneous_rep_matrix(rvec, tvec)[:3,:]
-    return P
-
-def write_keypoints_to_disk(filename, kpts):
-    with open(filename, 'w') as fout:
-        for frame_kpts in kpts:
-            frame_kpts = np.asarray(frame_kpts)
-            frame_kpts = frame_kpts.reshape((-1, frame_kpts.shape[-1]))
-            for kpt in frame_kpts:
-                fout.write(' '.join(str(value) for value in kpt) + ' ')
-            fout.write('\n')
-
-def write_instrinsic_parameters(file_path, K, dist):
-    with open(file_path, 'w') as f:
-        f.write("intrinsic:\n")
-        for i in range(len(K)):
-            if i % 3 == 0:
-                f.write(' '.join(str(parameter) for parameter in K[i:i+3]))
-                f.write('\n')
-        f.write("distortion:\n")
-        f.write(' '.join(str(value) for value in dist) + '\n')
-
-def write_extrinsic_parameters(file_path, R, T):
-    with open(file_path, 'w') as f:
-        f.write("R:\n")
-        for row in R:
-            f.write(' '.join(str(parameter) for parameter in row))
-            f.write('\n')
-        f.write("T:\n")
-        for transpose in T:
-            f.write(str(transpose) + '\n')
-
-if __name__ == '__main__':
-
-    P2 = get_projection_matrix(0)
-    P1 = get_projection_matrix(1)
+    

@@ -126,7 +126,6 @@ def run_mp(input_stream1, input_stream2, P0, P1):
         For real time application, this is what you want.
         '''
         frame_p3ds = np.array(frame_p3ds).reshape((len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3))
-        print(frame_p3ds)
         kpts_3d.append(frame_p3ds)
 
         # Draw the hand annotations on the image.
@@ -176,6 +175,9 @@ if __name__ == '__main__':
 
     kpts_cam0, kpts_cam1, kpts_3d = run_mp(input_stream1, input_stream2, P0, P1)
 
+    for pts_3d in kpts_3d:
+        print(pts_3d)
+        print("-------------------------------")
     #this will create keypoints file in current working folder
     write_keypoints_to_disk('kpts_cam0.dat', kpts_cam0)
     write_keypoints_to_disk('kpts_cam1.dat', kpts_cam1)
