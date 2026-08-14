@@ -1,6 +1,10 @@
-import copy
+from pathlib import Path
 
 import numpy as np
+from google.protobuf import descriptor_pb2
+from google.protobuf import json_format
+from google.protobuf import struct_pb2
+from mcap.writer import Writer
 
 def msg_time_sync(ref_msg, target_msg):
     """
@@ -23,14 +27,11 @@ def msg_time_sync(ref_msg, target_msg):
             if target_time >= ref_time:
                 target_index = idx  # Update the target index for the next iteration
                 break
-            elif idx == len(target_msg) - 1:
-                target_index = idx  # Update the target index for the next iteration
-                break
             
         # If the target time is less than or equal to the reference time, update the output message
         output_msg.append(target_msg[target_index])
         
-    return output_msg  
+    return output_msg   
 
 def quat_to_rot_matrix(qx, qy, qz, qw):
     # Assumes qx, qy, qz, qw is normalized

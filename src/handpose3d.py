@@ -2,8 +2,7 @@ import cv2 as cv
 import mediapipe as mp
 import numpy as np
 import sys
-from extract_mcap import read_mcap_protobuf
-from extract_mcap import read_mcap_protobuf
+from extract_mcap import construct_2d_hand_keypoints_msg, read_mcap_protobuf, construct_3d_hand_keypoints_msg, write_2d_hand_keypoints_mcap, write_3d_hand_keypoints_mcap
 from imu_calculation import calculate_position_from_imu
 from utils import DLT, get_projection_matrix, msg_time_sync, write_keypoints_to_disk
 
@@ -163,7 +162,7 @@ def run_mp(input_stream1, input_stream2, P0, P1):
 
     return np.array(kpts_cam0), np.array(kpts_cam1), np.array(kpts_3d)
 
-def handpose3d(stream1, stream2, imu_pts=None):
+def handpose3d(stream1, stream2, imu_pts=None, timestamps=None):
     input_stream1 = stream1
     input_stream2 = stream2
     
@@ -179,7 +178,21 @@ def handpose3d(stream1, stream2, imu_pts=None):
                 for kpt in hand_kpts:
                     if kpt[0] != -1:
                         kpt += imu_pt
-                        
+
+    print(f"Total frames processed: {len(kpts_3d)}")
+    print(f"Total keypoints processed: {len(timestamps)}")
+    msg_left_hand, msg_right_hand = construct_3d_hand_keypoints_msg(kpts_3d, timestamps)
+    msg_hands = construct_2d_hand_keypoints_msg(kpts_cam0, timestamps)
+    write_3d_hand_keypoints_mcap(kpts_3d, timestamps, 'hand_keypoints.mcap')
+    write_2d_hand_keypoints_mcap(kpts_cam0, timestamps, 'hand_keypoints.mcap')
+    for msg in msg_hands:
+        print(f"{msg}")
+        print("-------------------------------")
+    # for msg in msg_left_hand:
+    #     print(f"{msg}")
+    #     print("-------------------------------")
+    # write_list_of_dict_to_protobuf(msg_left_hand, 'hand_keypoints_left.mcap')
+    # write_list_of_dict_to_protobuf(msg_right_hand, 'hand_keypoints_right.mcap')
     #this will create keypoints file in current working folder
     write_keypoints_to_disk('kpts_cam0.dat', kpts_cam0)
     write_keypoints_to_disk('kpts_cam1.dat', kpts_cam1)
@@ -190,11 +203,13 @@ if __name__ == '__main__':
     input_stream1 = 'media/camera1.mp4'
     input_stream2 = 'media/camera4.mp4'
     mcap_path = '/Users/yangxu/Documents/Code/ff9e3e1189504041b9ce21256925377f.mcap'
+    mcap_path = '/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap'
     imu_topic = '/robot0/sensor/imu'
-    video_topics = ['/robot0/sensor/camera1/camera_info', '/robot0/sensor/camera4/camera_info']
+    video_topics = ['/robot0/sensor/camera1/compressed', '/robot0/sensor/camera4/compressed']
 
     msg_imu = read_mcap_protobuf(mcap_path, imu_topic)
     msg_cam = read_mcap_protobuf(mcap_path, video_topics[0])
+    timestamps = [msg['header']['timestamp'] for msg in msg_cam]
     msg_imu_synced = msg_time_sync(msg_cam, msg_imu)
     imu_pts = calculate_position_from_imu(msg_imu_synced)
-    handpose3d(input_stream1, input_stream2, imu_pts)
+    handpose3d(input_stream1, input_stream2, imu_pts, timestamps)

@@ -102,10 +102,20 @@ wheels = [
 ]
 
 [[package]]
+name = "genson"
+version = "1.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/53/de162dc8e03fccd9ebe59d17c7812378fe8bd2b604f6b1b94d00165140ac/genson-1.4.0.tar.gz", hash = "sha256:bc7f1c1bae87a21ca44d81149aec95a3f4468d676de9b8b08caa064f3c50b3da", size = 47908, upload-time = "2026-07-06T08:21:50.331Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/02/767f744ab6d4cb7761e5008acc3d534b7a0481af62563d52e391fbcb2140/genson-1.4.0-py3-none-any.whl", hash = "sha256:03bc71bbe52defde70660cc4dcd1ea1097997da5a1cbb90a9dbd3acc7c9e1b65", size = 24484, upload-time = "2026-07-06T08:21:49.046Z" },
+]
+
+[[package]]
 name = "handpose"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "genson" },
     { name = "matplotlib" },
     { name = "mcap" },
     { name = "mcap-protobuf-support" },
@@ -115,6 +125,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "genson", specifier = ">=1.4.0" },
     { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "mcap", specifier = ">=1.4.0" },
     { name = "mcap-protobuf-support", specifier = ">=0.5.4" },

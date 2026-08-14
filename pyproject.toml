@@ -4,6 +4,7 @@ version = "0.0.0"
 description = "3D handpose annotation"
 requires-python = ">=3.10,<3.11"
 dependencies = [
+    "genson>=1.4.0",
     "matplotlib>=3.10.9",
     "mcap>=1.4.0",
     "mcap-protobuf-support>=0.5.4",

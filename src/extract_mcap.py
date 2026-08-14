@@ -18,7 +18,7 @@ mcap → MP4 视频提取工具
     python3 extract_video.py data.mcap /robot0/sensor/camera0/compressed -o cam0.mp4
     python3 extract_video.py data.mcap --all -o ./videos/
 """
-
+import json
 import os
 import sys
 import argparse
@@ -27,6 +27,271 @@ from mcap.reader import make_reader
 from mcap_ros2.reader import read_ros2_messages
 from mcap_protobuf.decoder import DecoderFactory
 from google.protobuf.json_format import MessageToDict
+from google.protobuf import descriptor_pb2
+from google.protobuf import json_format
+from google.protobuf import struct_pb2
+from mcap.writer import Writer
+from genson import SchemaBuilder
+
+BONE_NAMES = [
+    "Hand",
+    "Thumb0", "Thumb1", "Thumb2", "Thumb3",
+    "Index0", "Index1", "Index2", "Index3",
+    "Middle0", "Middle1", "Middle2", "Middle3",
+    "Ring0", "Ring1", "Ring2", "Ring3",
+    "Pinkie0", "Pinkie1", "Pinkie2", "Pinkie3"
+]
+
+def generate_jsonschema_2d():
+    """Generates a dynamic JSON Schema matching your hand data layout."""
+    point_schema = {
+        "type": "object",
+        "properties": {
+            "x": {"type": "number"},
+            "y": {"type": "number"},
+        },
+        "required": ["x", "y"]
+    }
+    
+    hand_properties = {
+        str(i): {
+            "type": "object",
+            "properties": {
+                "point": point_schema
+            },
+            "required": ["point"]
+        } for i in range(21)
+    }
+
+    hands_properties = {
+        str(i): {
+            "type": "object",
+            "properties": {
+                "keypoints": hand_properties
+            },
+            "required": ["keypoints"]
+        } for i in range(2)  # 0: Left, 1: Right
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "header": {
+                "type": "object",
+                "properties": {"timestamp": {"type": "string"}, "frame_index": {"type": "integer"}, "topic_name": {"type": "string"}},
+                "required": ["timestamp", "frame_index", "topic_name"]
+            },
+            "hands": {"type": "object", "properties": hands_properties, "required": [str(i) for i in range(2)]}
+        },
+        "required": ["header", "hands"]
+    }
+
+
+def _to_builtin_scalar(value):
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+def generate_jsonschema_3d():
+    """Generates a dynamic JSON Schema matching your hand data layout."""
+    pos_schema = {
+        "type": "object",
+        "properties": {
+            "x": {"type": "number"}, 
+            "y": {"type": "number"}, 
+            "z": {"type": "number"}
+        },
+        "required": ["x", "y", "z"]
+    }
+    bone_properties = {
+        str(i): {
+            "type": "object",
+            "properties": {
+                "bone_name": {"type": "string"},
+                "to_global": {
+                    "type": "object", 
+                    "properties": {"position": pos_schema}, 
+                    "required": ["position"]
+                }
+            },
+            "required": ["bone_name", "to_global"]
+        } for i in range(21)
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "header": {
+                "type": "object",
+                "properties": {"timestamp": {"type": "number"}, "frame_index": {"type": "integer"}, "topic_name": {"type": "string"}},
+                "required": ["timestamp", "frame_index", "topic_name"]
+            },
+            "bone_data": {"type": "object", "properties": bone_properties, "required": [str(i) for i in range(21)]}
+        },
+        "required": ["header", "bone_data"]
+    }
+
+def build_hand_message_2d(timestamp, idx, handpoints):
+    """Formats raw array parameters into your exact dictionary schema."""
+    hands = {}
+
+    for j in range(2):  # 0: Left, 1: Right
+        hands[str(j)] = {
+            "keypoints": {
+                str(i): {
+                    "point": {
+                        "x": _to_builtin_scalar(handpoints[j][i][0]),
+                        "y": _to_builtin_scalar(handpoints[j][i][1])
+                    }
+                } for i in range(21)
+            }
+        }
+
+    return {
+        "header": {
+            "timestamp": str(timestamp),
+            "frame_index": idx,
+            "topic_name": f"/robot0/sensor/camera/pre/hand_keypoints2d"
+        },
+        "hands": hands
+    }
+
+def build_hand_message_3d(timestamp, idx, left_right, handpoints):
+    """Formats raw array parameters into your exact dictionary schema."""
+    prefix = left_right.capitalize()
+    bone_data = {}
+    
+    for i, name in enumerate(BONE_NAMES):
+        bone_data[str(i)] = {
+            "bone_name": f"{prefix}_{name}",
+            "to_global": {
+                "position": {
+                    "x": handpoints[i][0],
+                    "y": handpoints[i][1],
+                    "z": handpoints[i][2]
+                }
+            }
+        }
+        
+    return {
+        "header": {
+            "timestamp": timestamp,
+            "frame_index": idx,
+            "topic_name": f"/robot0/handtracking/{left_right}"
+        },
+        "bone_data": bone_data
+    }
+
+def construct_2d_hand_keypoints_msg(kpts_2d, timestamps):
+    """Constructs a list of dictionaries for left and right hand keypoints."""
+    hands_msgs = []
+    
+    for idx, (kpts, timestamp) in enumerate(zip(kpts_2d, timestamps)):
+        hands_msg = build_hand_message_2d(timestamp, idx, kpts)        
+        hands_msgs.append(hands_msg)
+    
+    return hands_msgs
+
+def construct_3d_hand_keypoints_msg(kpts_3d, timestamps):
+    """Constructs a list of dictionaries for left and right hand keypoints."""
+    left_hand_msgs = []
+    right_hand_msgs = []
+    
+    for idx, (kpts, timestamp) in enumerate(zip(kpts_3d, timestamps)):
+        left_hand_msg = build_hand_message_3d(timestamp, idx, "left", kpts[0])
+        right_hand_msg = build_hand_message_3d(timestamp, idx, "right", kpts[1])
+        
+        left_hand_msgs.append(left_hand_msg)
+        right_hand_msgs.append(right_hand_msg)
+    
+    return left_hand_msgs, right_hand_msgs
+
+def write_2d_hand_keypoints_mcap(kpts_2d, timestamps, output_mcap_path):
+    """Writes the 2D hand keypoints to an MCAP file."""
+    
+    with open(output_mcap_path, "wb") as f:
+        writer = Writer(f)
+        writer.start()
+
+        # 1. Register Schema rules
+        schema_id = writer.register_schema(
+            name="robot_hand_tracking",
+            encoding="jsonschema",
+            data=json.dumps(generate_jsonschema_2d()).encode("utf-8")
+        )
+
+        # 2. Register separate channels for Left and Right topics
+        hands_channel = writer.register_channel(
+            topic="/robot0/sensor/camera/pre/hand_keypoints2d",
+            message_encoding="json",
+            schema_id=schema_id
+        )
+
+        # 3. Write messages for each timestamp
+        for idx, (kpts, timestamp) in enumerate(zip(kpts_2d, timestamps)):
+            hands_msg = build_hand_message_2d(timestamp, idx, kpts)
+
+            time_ns = int(timestamp)
+
+            # 5. Write messages to the file structure
+            writer.add_message(
+                channel_id=hands_channel,
+                log_time=time_ns,
+                publish_time=time_ns,
+                sequence=0,
+                data=json.dumps(hands_msg).encode("utf-8")
+            )
+
+        writer.finish()
+
+def write_3d_hand_keypoints_mcap(kpts_3d, timestamps, output_mcap_path):
+    """Writes the 3D hand keypoints to an MCAP file."""
+    
+    with open(output_mcap_path, "wb") as f:
+        writer = Writer(f)
+        writer.start()
+
+        # 1. Register Schema rules
+        schema_id = writer.register_schema(
+            name="robot_hand_tracking",
+            encoding="jsonschema",
+            data=json.dumps(generate_jsonschema_3d()).encode("utf-8")
+        )
+
+        # 2. Register separate channels for Left and Right topics
+        left_channel = writer.register_channel(
+            topic="/robot0/handtracking/left",
+            message_encoding="json",
+            schema_id=schema_id
+        )
+        right_channel = writer.register_channel(
+            topic="/robot0/handtracking/right",
+            message_encoding="json",
+            schema_id=schema_id
+        )
+
+        # 3. Write messages for each timestamp
+        for idx, (kpts, timestamp) in enumerate(zip(kpts_3d, timestamps)):
+            left_hand_msg = build_hand_message_3d(timestamp, idx, "left", kpts[0])
+            right_hand_msg = build_hand_message_3d(timestamp, idx, "right", kpts[1])
+
+            time_ns = int(timestamp)
+
+            # 5. Write messages to the file structure
+            writer.add_message(
+                channel_id=left_channel,
+                log_time=time_ns,
+                publish_time=time_ns,
+                sequence=0,
+                data=json.dumps(left_hand_msg).encode("utf-8")
+            )
+            writer.add_message(
+                channel_id=right_channel,
+                log_time=time_ns,
+                publish_time=time_ns,
+                sequence=0,
+                data=json.dumps(right_hand_msg).encode("utf-8")
+            )
+            
+            writer.finish()
 
 def read_mcap_protobuf_once(mcap_path, topics=None):
     with open(mcap_path, "rb") as f:
@@ -78,7 +343,6 @@ def read_varint(data, offset):
             break
         shift += 7
     return result, offset
-
 
 def extract_h264_data(msg_data):
     """从 foxglove.CompressedImage protobuf 消息中提取 H.264 数据"""
