@@ -2,9 +2,11 @@ import cv2 as cv
 import mediapipe as mp
 import numpy as np
 import sys
-from extract_mcap import construct_2d_hand_keypoints_msg, read_mcap_protobuf, construct_3d_hand_keypoints_msg, write_2d_hand_keypoints_mcap, write_3d_hand_keypoints_mcap
+from mcap_utils import construct_2d_hand_keypoints_msg, read_mcap_protobuf, construct_3d_hand_keypoints_msg, write_2d_hand_keypoints_mcap, write_3d_hand_keypoints_mcap, safe_merge_mcaps
 from imu_calculation import calculate_position_from_imu
 from utils import DLT, get_projection_matrix, msg_time_sync, write_keypoints_to_disk
+from pymcap import PyMCAP
+from pathlib import Path
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -56,11 +58,9 @@ def _extract_frame_keypoints(results, frame, point_dim):
     return frame_keypoints
 
 
-def run_mp(input_stream1, input_stream2, P0, P1):
+def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     #input video stream
-    cap0 = cv.VideoCapture(input_stream1)
-    cap1 = cv.VideoCapture(input_stream2)
-    caps = [cap0, cap1]
+    caps = [cv.VideoCapture(input_stream) for input_stream in input_streams]
 
     #set camera resolution if using webcam to 1280x720. Any bigger will cause some lag for hand detection
     for cap in caps:
@@ -68,52 +68,55 @@ def run_mp(input_stream1, input_stream2, P0, P1):
         cap.set(4, frame_shape[0])
 
     #create hand keypoints detector object.
-    hands0 = mp_hands.Hands(min_detection_confidence=0.5, max_num_hands=2, min_tracking_confidence=0.5)
-    hands1 = mp_hands.Hands(min_detection_confidence=0.5, max_num_hands=2, min_tracking_confidence=0.5)
+    hands = [mp_hands.Hands(min_detection_confidence=0.5, max_num_hands=2, min_tracking_confidence=0.5) for _ in input_streams]
 
     #containers for detected keypoints for each camera
-    kpts_cam0 = []
-    kpts_cam1 = []
+    kpts_cam = []
+    for i in range(len(hands)):
+        kpts_cam.append([])
     kpts_3d = []
+
+    frame_idx = 0
     while True:
 
         #read frames from stream
-        ret0, frame0 = cap0.read()
-        ret1, frame1 = cap1.read()
+        ret =[]
+        frame = []
+        results = []
 
-        if not ret0 or not ret1: break
+        for i, cap in enumerate(caps):
+            ret_read, frame_read = cap.read()
+            ret.append(ret_read)
+            frame.append(frame_read)
+
+        if not ret[cam_ids[0]] or not ret[cam_ids[1]]: break
 
         #crop to 720x720.
         #Note: camera calibration parameters are set to this resolution.If you change this, make sure to also change camera intrinsic parameters
-        if frame0.shape[1] != 720:
-            frame0 = frame0[:,frame_shape[1]//2 - frame_shape[0]//2:frame_shape[1]//2 + frame_shape[0]//2]
-            frame1 = frame1[:,frame_shape[1]//2 - frame_shape[0]//2:frame_shape[1]//2 + frame_shape[0]//2]
-
-        # the BGR image to RGB.
-        frame0 = cv.cvtColor(frame0, cv.COLOR_BGR2RGB)
-        frame1 = cv.cvtColor(frame1, cv.COLOR_BGR2RGB)
-
-        # To improve performance, optionally mark the image as not writeable to
-        # pass by reference.
-        frame0.flags.writeable = False
-        frame1.flags.writeable = False
-        results0 = hands0.process(frame0)
-        results1 = hands1.process(frame1)
+        for i in range(len(input_streams)):
+            if frame[i] is not None and frame[i].shape[1] != 720:
+                frame_temp = frame[i][:,frame_shape[1]//2 - frame_shape[0]//2:frame_shape[1]//2 + frame_shape[0]//2]
+                # the BGR image to RGB.
+                frame[i] = cv.cvtColor(frame_temp, cv.COLOR_BGR2RGB)
+                # To improve performance, optionally mark the image as not writeable to
+                # pass by reference.
+                frame[i].flags.writeable = False
+                results.append(hands[i].process(frame[i]))
+            else:
+                results.append(results[-1] if results else None)
 
         #prepare list of hand keypoints of this frame
         #frame0 kpts
-        frame0_keypoints = _extract_frame_keypoints(results0, frame0, point_dim=2)
-        kpts_cam0.append(frame0_keypoints)
-
-        #frame1 kpts
-        frame1_keypoints = _extract_frame_keypoints(results1, frame1, point_dim=2)
-        #update keypoints container
-        kpts_cam1.append(frame1_keypoints)
-
+        for i in range(len(input_streams)):
+            if frame[i] is not None:
+                frame_keypoints = _extract_frame_keypoints(results[i], frame[i], point_dim=2)
+                kpts_cam[i].append(frame_keypoints)
+            else:
+                kpts_cam[i].append(_empty_frame_keypoints(len(HAND_LABELS), point_dim=2))
 
         #calculate 3d position
         frame_p3ds = []
-        for hand0_keypoints, hand1_keypoints in zip(frame0_keypoints, frame1_keypoints):
+        for hand0_keypoints, hand1_keypoints in zip(kpts_cam[cam_ids[0]][-1], kpts_cam[cam_ids[1]][-1]):
             hand_p3ds = []
             for uv1, uv2 in zip(hand0_keypoints, hand1_keypoints):
                 if uv1[0] == -1 or uv2[0] == -1:
@@ -131,46 +134,51 @@ def run_mp(input_stream1, input_stream2, P0, P1):
         kpts_3d.append(frame_p3ds)
 
         # Draw the hand annotations on the image.
-        frame0.flags.writeable = True
-        frame1.flags.writeable = True
-        frame0 = cv.cvtColor(frame0, cv.COLOR_RGB2BGR)
-        frame1 = cv.cvtColor(frame1, cv.COLOR_RGB2BGR)
+        frame[cam_ids[0]].flags.writeable = True
+        frame[cam_ids[1]].flags.writeable = True
+        frame[cam_ids[0]] = cv.cvtColor(frame[cam_ids[0]], cv.COLOR_RGB2BGR)
+        frame[cam_ids[1]] = cv.cvtColor(frame[cam_ids[1]], cv.COLOR_RGB2BGR)
 
-        if results0.multi_hand_landmarks:
-          for i, hand_landmarks in enumerate(results0.multi_hand_landmarks):
+        if results[cam_ids[0]].multi_hand_landmarks:
+          for i, hand_landmarks in enumerate(results[cam_ids[0]].multi_hand_landmarks):
             if i == 0:
-                mp_drawing.draw_landmarks(frame0, hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
+                mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
             else:
-                mp_drawing.draw_landmarks(frame0, hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+                mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
 
-        if results1.multi_hand_landmarks:
-          for i, hand_landmarks in enumerate(results1.multi_hand_landmarks):
+        if results[cam_ids[1]].multi_hand_landmarks:
+          for i, hand_landmarks in enumerate(results[cam_ids[1]].multi_hand_landmarks):
             if i == 0:
-                mp_drawing.draw_landmarks(frame1, hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
+                mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
             else:
-                mp_drawing.draw_landmarks(frame1, hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
-        cv.imshow('cam1', frame1)
-        cv.imshow('cam0', frame0)
+                mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+
+        if visualize:
+            cv.imshow('cam1', frame[cam_ids[1]])
+            cv.imshow('cam0', frame[cam_ids[0]])
 
         k = cv.waitKey(1)
         if k & 0xFF == 27: break #27 is ESC key.
 
+        frame_idx += 1
 
-    cv.destroyAllWindows()
+    if visualize:
+        cv.destroyAllWindows()
     for cap in caps:
         cap.release()
 
-    return np.array(kpts_cam0), np.array(kpts_cam1), np.array(kpts_3d)
+    return np.array(kpts_cam), np.array(kpts_3d)
 
-def handpose3d(stream1, stream2, imu_pts=None, timestamps=None):
-    input_stream1 = stream1
-    input_stream2 = stream2
+def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestamps=None, visualize=False):
+    input_streams = streams
     
     #projection matrices
     P0 = get_projection_matrix(0)
     P1 = get_projection_matrix(1)
     
-    kpts_cam0, kpts_cam1, kpts_3d = run_mp(input_stream1, input_stream2, P0, P1)
+    kpts_cam, kpts_3d = run_mp(input_streams, P0, P1, cam_3d_ids, visualize)
+    
+    kpts_cam = np.array(kpts_cam)
 
     if imu_pts is not None:
         for kpts, imu_pts in zip(kpts_3d, imu_pts):
@@ -179,31 +187,20 @@ def handpose3d(stream1, stream2, imu_pts=None, timestamps=None):
                     if kpt[0] != -1:
                         kpt += imu_pt
 
-    print(f"Total frames processed: {len(kpts_3d)}")
-    print(f"Total keypoints processed: {len(timestamps)}")
-    msg_left_hand, msg_right_hand = construct_3d_hand_keypoints_msg(kpts_3d, timestamps)
-    msg_hands = construct_2d_hand_keypoints_msg(kpts_cam0, timestamps)
-    write_3d_hand_keypoints_mcap(kpts_3d, timestamps, 'hand_keypoints.mcap')
-    write_2d_hand_keypoints_mcap(kpts_cam0, timestamps, 'hand_keypoints.mcap')
-    for msg in msg_hands:
-        print(f"{msg}")
-        print("-------------------------------")
-    # for msg in msg_left_hand:
-    #     print(f"{msg}")
-    #     print("-------------------------------")
-    # write_list_of_dict_to_protobuf(msg_left_hand, 'hand_keypoints_left.mcap')
-    # write_list_of_dict_to_protobuf(msg_right_hand, 'hand_keypoints_right.mcap')
-    #this will create keypoints file in current working folder
-    write_keypoints_to_disk('kpts_cam0.dat', kpts_cam0)
-    write_keypoints_to_disk('kpts_cam1.dat', kpts_cam1)
-    write_keypoints_to_disk('kpts_3d.dat', kpts_3d)
+    # msg_left_hand, msg_right_hand = construct_3d_hand_keypoints_msg(kpts_3d, timestamps)
+    write_3d_hand_keypoints_mcap(kpts_3d, timestamps, 'processed_data/hand_keypoints_3d.mcap')
+    for i, kpts_2d in enumerate(kpts_cam):
+        write_2d_hand_keypoints_mcap(kpts_2d, timestamps, f"/robot0/sensor/camera{i}/pre/hand_keypoints2d", f'processed_data/hand_keypoints_2d_cam{i}.mcap')
+    file_paths = [f'processed_data/hand_keypoints_2d_cam{i}.mcap' for i in range(len(kpts_cam))] + ['processed_data/hand_keypoints_3d.mcap']
+    # Use safe_merge_mcaps instead of PyMCAP.merge to avoid corrupting files via raw append
+    safe_merge_mcaps(file_paths, output_path)
 
 if __name__ == '__main__':
 
     input_stream1 = 'media/camera1.mp4'
     input_stream2 = 'media/camera4.mp4'
     mcap_path = '/Users/yangxu/Documents/Code/ff9e3e1189504041b9ce21256925377f.mcap'
-    mcap_path = '/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap'
+    # mcap_path = '/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap'
     imu_topic = '/robot0/sensor/imu'
     video_topics = ['/robot0/sensor/camera1/compressed', '/robot0/sensor/camera4/compressed']
 
@@ -212,4 +209,5 @@ if __name__ == '__main__':
     timestamps = [msg['header']['timestamp'] for msg in msg_cam]
     msg_imu_synced = msg_time_sync(msg_cam, msg_imu)
     imu_pts = calculate_position_from_imu(msg_imu_synced)
-    handpose3d(input_stream1, input_stream2, imu_pts, timestamps)
+    input_streams = [f'processed_data/camera{i}.mp4' for i in range(6)]
+    handpose3d(input_streams, cam_3d_ids = [1, 4], imu_pts=imu_pts, timestamps=timestamps, visualize=True)

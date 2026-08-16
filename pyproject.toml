@@ -10,4 +10,5 @@ dependencies = [
     "mcap-protobuf-support>=0.5.4",
     "mcap-ros2-support>=0.5.7",
     "mediapipe==0.10.14",
+    "pymcap>=0.2",
 ]

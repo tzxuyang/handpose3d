@@ -291,7 +291,7 @@ if __name__ == "__main__":
     msg_cam = read_mcap_protobuf(mcap_path, video_topics[0])
     msg_imu_synced = msg_time_sync(msg_cam, msg_imu)
     position = calculate_position_from_imu(msg_imu_synced)
-    print(f"Estimated position shape: {position.shape}")
+
     x_list = []
     y_list = []
     z_list = []
