@@ -199,6 +199,106 @@ def build_hand_message_3d(timestamp, idx, left_right, handpoints):
         "bone_data": bone_data
     }
 
+def read_hand_json_2d(hand_msg):
+    """Extracts 2D hand keypoints from a hand message json dict."""
+    hands = hand_msg.get("data", {})
+    hands = hands.get("hands", {})
+    kpts_2d = [[[-1.0 for _ in range(2)] for _ in range(21)] for _ in range(2)]
+
+    if isinstance(hands, dict):
+        hand_items = []
+        for j in range(2):
+            hand_info = hands.get(str(j), {})
+            hand_items.append((j, hand_info))
+
+    for hand_slot, hand_info in hand_items:
+        keypoints = hand_info.get("keypoints", {})
+        if isinstance(keypoints, dict):
+            keypoint_items = [keypoints.get(str(i), {}) for i in range(21)]
+        elif isinstance(keypoints, list):
+            keypoint_items = keypoints
+        else:
+            raise ValueError(f'Unsupported keypoints container type: {type(keypoints).__name__}')
+    
+        for i, keypoint in enumerate(keypoint_items[:21]):
+            point = keypoint.get("point", {})
+            kpts_2d[hand_slot][i][0] = float(point.get("x", -1))
+            kpts_2d[hand_slot][i][1] = float(point.get("y", -1))
+        
+    return kpts_2d
+
+def read_hand_json_3d(hand_msg):
+    """Extracts 3D hand keypoints from a hand message json dict."""
+    bone_data = hand_msg.get("data", {}).get("bone_data", {})
+    kpts_3d = [[0 for _ in range(3)] for _ in range(21)]
+    
+    for i in range(21):
+        bone_info = bone_data.get(str(i), {})
+        position = bone_info.get("to_global", {}).get("position", {})
+        kpts_3d[i][0] = float(position.get("x", -1))
+        kpts_3d[i][1] = float(position.get("y", -1))
+        kpts_3d[i][2] = float(position.get("z", -1))
+    
+    return kpts_3d
+
+def read_hand_message_2d(hand_msg):
+    """Extracts 2D hand keypoints from a hand message dictionary."""
+    hands = hand_msg.get("hands", {})
+    kpts_2d = [[[-1.0 for _ in range(2)] for _ in range(21)] for _ in range(2)]
+
+    if isinstance(hands, dict):
+        hand_items = []
+        for j in range(2):
+            hand_info = hands.get(str(j), {})
+            hand_items.append((j, hand_info))
+    elif isinstance(hands, list):
+        hand_items = []
+        next_slot = 0
+        for hand_info in hands:
+            hand_slot = hand_info.get("hand_id")
+            if not isinstance(hand_slot, int) or not 0 <= hand_slot < 2:
+                while next_slot < 2 and any(kpts_2d[next_slot][i][0] != -1.0 for i in range(21)):
+                    next_slot += 1
+                if next_slot >= 2:
+                    break
+                hand_slot = next_slot
+                next_slot += 1
+
+            hand_items.append((hand_slot, hand_info))
+    else:
+        raise ValueError(f'Unsupported hands container type: {type(hands).__name__}')
+
+    for hand_slot, hand_info in hand_items:
+        keypoints = hand_info.get("keypoints", {})
+        if isinstance(keypoints, dict):
+            keypoint_items = [keypoints.get(str(i), {}) for i in range(21)]
+        elif isinstance(keypoints, list):
+            keypoint_items = keypoints
+        else:
+            raise ValueError(f'Unsupported keypoints container type: {type(keypoints).__name__}')
+
+        for i, keypoint in enumerate(keypoint_items[:21]):
+            point = keypoint.get("point", {})
+            kpts_2d[hand_slot][i][0] = float(point.get("x", -1.0))
+            kpts_2d[hand_slot][i][1] = float(point.get("y", -1.0))
+    
+    return kpts_2d
+
+def read_hand_message_3d(hand_msg):
+    """Extracts 3D hand keypoints from a hand message dictionary."""
+    bone_data = hand_msg.get("bone_data", {})
+    kpts_3d = [[0 for _ in range(3)] for _ in range(21)]
+    # kpts_3d = np.zeros((21, 3), dtype=np.float32)
+    
+    for i in range(21):
+        bone_info = bone_data[i]
+        position = bone_info.get("to_global", {}).get("position", {})
+        kpts_3d[i][0] = float(position.get("x", -1.0))
+        kpts_3d[i][1] = float(position.get("y", -1.0))
+        kpts_3d[i][2] = float(position.get("z", -1.0))
+    
+    return kpts_3d
+
 def construct_2d_hand_keypoints_msg(kpts_2d, timestamps, topic_name):
     """Constructs a list of dictionaries for left and right hand keypoints."""
     hands_msgs = []
@@ -375,7 +475,6 @@ def safe_merge_mcaps(input_paths, output_path):
 
         writer.finish()
 
-
 def readmcap(mcap_path, config_path, output_path):
     with open(config_path, "r") as f:
         config = json.load(f)
@@ -446,6 +545,21 @@ def read_mcap_protobuf(mcap_path, topics=None):
             messages_dict.append(msg_dict)
             
     return messages_dict
+
+def read_mcap_json(mcap_path, topics=None):
+    results = []
+    with open(mcap_path, "rb") as f: 
+        reader = make_reader(f)
+        for schema, channel, message in reader.iter_messages(topics=topics):
+            if channel.message_encoding.lower() == "json":
+                payload = json.loads(message.data.decode("utf-8"))
+                results.append({
+                    "topic": channel.topic,
+                    "log_time": message.log_time,
+                    "data": payload
+                })
+
+    return results
         
 def read_mcap_topics(mcap_path, topics=None):
     with open(mcap_path, "rb") as f:

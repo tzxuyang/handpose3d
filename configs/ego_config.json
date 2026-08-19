@@ -11,5 +11,17 @@
         "/robot0/sensor/camera1/camera_info",
         "/robot0/sensor/camera4/camera_info"
     ],
-    "imu_topic": "/robot0/sensor/imu"
+    "imu_topic": "/robot0/sensor/imu",
+    "handpoints_2d_topic": [
+        "/robot0/sensor/camera0/pre/hand_keypoints2d",
+        "/robot0/sensor/camera1/pre/hand_keypoints2d",
+        "/robot0/sensor/camera2/pre/hand_keypoints2d",
+        "/robot0/sensor/camera3/pre/hand_keypoints2d",
+        "/robot0/sensor/camera4/pre/hand_keypoints2d",
+        "/robot0/sensor/camera5/pre/hand_keypoints2d"
+    ],
+    "handpoints_3d_topic": [
+        "/robot0/handtracking/left",
+        "/robot0/handtracking/right"
+    ]
 }

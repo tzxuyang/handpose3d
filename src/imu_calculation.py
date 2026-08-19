@@ -276,7 +276,7 @@ def calculate_position_from_imu(
 if __name__ == "__main__":
     import json
     from matplotlib import pyplot as plt
-    from readmcap import read_mcap_protobuf
+    from mcap_utils import read_mcap_protobuf
     from utils import msg_time_sync
 
     mcap_path = "/Users/yangxu/Documents/Code/ff9e3e1189504041b9ce21256925377f.mcap"
