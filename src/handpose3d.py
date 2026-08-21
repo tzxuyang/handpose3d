@@ -4,7 +4,7 @@ import numpy as np
 import sys
 from mcap_utils import construct_2d_hand_keypoints_msg, read_mcap_protobuf, construct_3d_hand_keypoints_msg, write_2d_hand_keypoints_mcap, write_3d_hand_keypoints_mcap, safe_merge_mcaps
 from imu_calculation import calculate_position_from_imu
-from utils import DLT, get_projection_matrix, msg_time_sync, write_keypoints_to_disk, read_rotation_translation, read_camera_parameters, triangulate
+from utils import msg_time_sync, write_keypoints_to_disk, read_rotation_translation, read_camera_parameters, triangulate
 from pymcap import PyMCAP
 from pathlib import Path
 
@@ -16,6 +16,12 @@ HAND_LABELS = ('Left', 'Right')
 NUM_HAND_KEYPOINTS = 21
 BLUE = (255, 0, 0)
 RED = (0, 0, 255)
+TRIANGULATION_TO_BODY_AXES = np.array(
+    [[0.0, -1.0, 0.0],
+     [1.0,  0.0, 0.0],
+     [0.0,  0.0, 1.0]],
+    dtype=np.float32,
+)
 
 
 def _empty_frame_keypoints(num_hands, point_dim):
@@ -58,12 +64,61 @@ def _extract_frame_keypoints(results, frame, point_dim):
     return frame_keypoints
 
 
+def _undistort_hand_keypoints(hand_keypoints, camera_matrix, distortion):
+    hand_keypoints = np.asarray(hand_keypoints, dtype=np.float32)
+    undistorted_keypoints = np.full((NUM_HAND_KEYPOINTS, 2), -1.0, dtype=np.float32)
+
+    valid_mask = np.all(hand_keypoints != -1, axis=1)
+    if not np.any(valid_mask):
+        return undistorted_keypoints
+
+    valid_keypoints = np.ascontiguousarray(hand_keypoints[valid_mask].reshape(-1, 1, 2))
+    undistorted_valid_keypoints = cv.undistortPoints(
+        valid_keypoints,
+        camera_matrix,
+        distortion,
+        P=camera_matrix,
+    ).reshape(-1, 2)
+    undistorted_keypoints[valid_mask] = undistorted_valid_keypoints
+
+    return undistorted_keypoints
+
+
+def _filter_hand_points_3d(hand_points_3d):
+    hand_points_3d = np.asarray(hand_points_3d, dtype=np.float32)
+    valid_mask = hand_points_3d[:, 0] != -1
+    if not np.any(valid_mask):
+        return hand_points_3d
+
+    valid_points = hand_points_3d[valid_mask]
+    median_depth = np.median(valid_points[:, 2])
+
+    wrist_point = hand_points_3d[0] if hand_points_3d[0, 0] != -1 else None
+    filtered_points = hand_points_3d.copy()
+    for point_idx, point in enumerate(filtered_points):
+        if point[0] == -1:
+            continue
+
+        if abs(point[2] - median_depth) > 0.12:
+            filtered_points[point_idx] = [-1, -1, -1]
+            continue
+
+        if wrist_point is not None and np.linalg.norm(point - wrist_point) > 0.22:
+            filtered_points[point_idx] = [-1, -1, -1]
+
+    return filtered_points
+
+
 def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     #read camera parameters
     cmtx0, dist0 = read_camera_parameters(0)
     cmtx1, dist1 = read_camera_parameters(1)
-    rvec0, tvec0 = read_rotation_translation(0)
-    rvec1, tvec1 = read_rotation_translation(1)
+    rmat0, tvec0 = read_rotation_translation(0)
+    _, tvec1 = read_rotation_translation(1)
+    tvec0 = np.asarray(tvec0, dtype=np.float32).reshape(3)
+    tvec1 = np.asarray(tvec1, dtype=np.float32).reshape(3)
+    stereo_translation = tvec1 - tvec0
+    body_from_triangulation = TRIANGULATION_TO_BODY_AXES @ rmat0
 
     #input video stream
     caps = [cv.VideoCapture(input_stream) for input_stream in input_streams]
@@ -123,40 +178,25 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         frame_p3ds = []
         
         for hand0_keypoints, hand1_keypoints in zip(kpts_cam[cam_ids[0]][-1], kpts_cam[cam_ids[1]][-1]):
-            hand0_keypoints_array = np.ascontiguousarray(
-                np.asarray(hand0_keypoints, dtype=np.float32).reshape(-1, 1, 2)
-            )
-            hand1_keypoints_array = np.ascontiguousarray(
-                np.asarray(hand1_keypoints, dtype=np.float32).reshape(-1, 1, 2)
-            )
-            if hand0_keypoints == [[-1, -1]] * NUM_HAND_KEYPOINTS:
-                hand0_keypoints_undistorted = np.full((NUM_HAND_KEYPOINTS, 2), -1.0)
-            else:
-                hand0_keypoints_undistorted = cv.undistortPoints(hand0_keypoints_array, cmtx0, dist0, P=cmtx0)
-                hand0_keypoints_undistorted = hand0_keypoints_undistorted.reshape(-1, 2)
-            if hand1_keypoints == [[-1, -1]] * NUM_HAND_KEYPOINTS:
-                hand1_keypoints_undistorted = np.full((NUM_HAND_KEYPOINTS, 2), -1.0)
-            else:
-                hand1_keypoints_undistorted = cv.undistortPoints(hand1_keypoints_array, cmtx1, dist1, P=cmtx1)
-                hand1_keypoints_undistorted = hand1_keypoints_undistorted.reshape(-1, 2)
-            if frame_idx < 10:
-                print(frame_idx)
-                print('hand0_keypoints: ', hand0_keypoints)
-                print('hand0_keypoints_undistorted: ', hand0_keypoints_undistorted)
-            frame_idx += 1
-            # print('hand0_keypoints: ', hand0_keypoints)
-            # print('hand0_keypoints_undistorted: ', hand0_keypoints_undistorted)
+            hand0_keypoints_undistorted = _undistort_hand_keypoints(hand0_keypoints, cmtx0, dist0)
+            hand1_keypoints_undistorted = _undistort_hand_keypoints(hand1_keypoints, cmtx1, dist1)
+
             hand_p3ds = []
             for uv1, uv2 in zip(hand0_keypoints_undistorted, hand1_keypoints_undistorted):
                 if uv1[0] == -1 or uv2[0] == -1:
                     _p3d = [-1, -1, -1]
                 else:
-                    # print('uv1: ', uv1)
-                    # print('uv1 reshape', np.array(uv1).reshape(-1,1,2))
-                    # _p3d = DLT(P0, P1, uv1, uv2) #calculate 3d position of keypoint
-                    _p3d = triangulate(uv1, uv2, cmtx0, tvec0, cmtx1, tvec1) #calculate 3d position of keypoint
+                    point_3d = triangulate(
+                        uv1,
+                        uv2,
+                        cmtx0,
+                        np.zeros(3, dtype=np.float64),
+                        cmtx1,
+                        stereo_translation,
+                    )
+                    _p3d = body_from_triangulation @ point_3d + tvec0
                 hand_p3ds.append(_p3d)
-            frame_p3ds.append(hand_p3ds)
+            frame_p3ds.append(_filter_hand_points_3d(hand_p3ds))
 
         '''
         This contains the 3d position of each keypoint in current frame.
@@ -172,11 +212,7 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         frame[cam_ids[1]] = cv.cvtColor(frame[cam_ids[1]], cv.COLOR_RGB2BGR)
 
         if results[cam_ids[0]].multi_hand_landmarks:
-          if frame_idx == 10:
-              print(f"hand landmarks {results[cam_ids[0]].multi_hand_landmarks}")
-              print(f"frame keypoints {kpts_cam[cam_ids[0]][-1]}")
           for i, hand_landmarks in enumerate(results[cam_ids[0]].multi_hand_landmarks):
-            print(f"Camera {frame[cam_ids[0]].shape}")
             if i == 0:
                 mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
             else:
@@ -207,13 +243,8 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
 
 def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestamps=None, visualize=False):
     input_streams = streams
-    
-    #projection matrices
-    P0 = get_projection_matrix(0)
-    print(P0)
-    P1 = get_projection_matrix(1)
-    
-    kpts_cam, kpts_3d = run_mp(input_streams, P0, P1, cam_3d_ids, visualize)
+
+    kpts_cam, kpts_3d = run_mp(input_streams, None, None, cam_3d_ids, visualize)
     
     kpts_cam = np.array(kpts_cam)
 

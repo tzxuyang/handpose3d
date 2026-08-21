@@ -2,9 +2,6 @@
 
 This is a demo on how to obtain 3D coordinates of hand keypoints using MediaPipe and two calibrated cameras. Two cameras are required as there is no way to obtain 3D coordinates from a single camera. Check here: [stereo calibrate](https://github.com/TemugeB/python_stereo_camera_calibrate) for a calibration package. Also my blog post on how to stereo calibrate two cameras: [link](https://temugeb.github.io/opencv/python/2021/02/02/stereo-camera-calibration-and-triangulation.html). Alternatively, follow the camera calibration at Opencv documentations: [link](https://docs.opencv.org/3.4/d9/d0c/group__calib3d.html). If you want to know some details on how this code works, take a look at my accompanying blog post here: [link](https://temugeb.github.io/python/computer_vision/2021/06/27/handpose3d.html).
 
-![input1](media/output_kpts.gif "input1") ![input2](media/output2_kpts.gif "input2") 
-![output](media/fig_0.gif "output")
-
 **MediaPipe**  
 Install mediapipe in your virtual environment using:
 ```
@@ -19,21 +16,28 @@ Opencv
 matplotlib
 ```
 
-**Usage: Getting real time 3D coordinates**  
-As a demo, I've included two short video clips and corresponding camera calibration parameters. Simply run as:
+**Usage: Generate 2D & 3D coordinates**  
+The ```handpose3d.py``` program creates a 3D coordinates file: ```processed_data/handpoints_3d.mcap```. To view the recorded 3D coordinates, simply call:
 ```
-python handpose3d.py
+uv run main.py --mode process --mcap_path /home/yang/Downloadsff9e3e1189504041b9ce21256925377f.mcap
 ```
-If you want to use webcam, call the program with camera ids. For example, cameras registered to 0 and 1:
+**Usage: Visualize 2D & 3D coordinates**  
+The ```show_hands.py``` program visualize the 2D coordinates on top of the image, and 3D coordinates in world coordinate
 ```
-python handpose3d.py 0 1
+uv run main.py --mode visualize
 ```
-Make sure the corresponding camera parameters are also updated for your cameras.
 
-The 3D coordinate in each video frame is recorded in ```frame_p3ds``` parameter. Use this for real time application. The default pipeline now tracks up to **two hands** and stores them in a fixed order: ```Left``` hand first, ```Right``` hand second. The per-frame shape is therefore ```(2, 21, 3)``` for 3D keypoints and ```(2, 21, 2)``` for each camera's 2D keypoints. If keypoints are not found, then the keypoints are recorded as (-1, -1, -1). **Warning**: The code also saves keypoints for all previous frames. If you run the code for long periods, then you will run out of memory. To fix this, remove append calls to: ```kpts_3d, kpts_cam0, kpts_cam1```. When you press the ESC key, hand keypoints detection will stop and three files will be saved to disk. These contain recorded 2D and 3D coordinates for both hands. 
+**Methodology**
+***Calibration
+mcap_utils.py extract video raw mp4 files from mcap file, it also read camera info from message such as "/robot0/sensor/camera0/camera_info"
+write the intrinsic calibration to c0.dat and extrinsic calibration (rotation R and translation T) to rot_trans_c0.data
 
-**Usage: Viewing 3D coordinates**  
-The ```handpose3d.py``` program creates a 3D coordinates file: ```kpts_3d.dat```. To view the recorded 3D coordinates, simply call:
-```
-python show_3d_hands.py
-```
+***2D handpoint detection
+use mediapipe from google to detect 2D handpoint in pixels (x, y), the 2D result are composed as a list of size (2, 21, 2)
+
+***2D handpoint undistortion
+The camera is distorted (calibration shall be saved in c0.dat, and c1.dat). The cv2.undistortPoints() function to get undistorted 2D data point
+
+***3D projection
+use 2D handpoint detected from two cameras, and the intrinsic and extrinsic parameters from the two cameras (left cam & right cam) to project 2D coordinates into 3D coordinates
+

@@ -170,27 +170,8 @@ def visualize_3d(p3ds):
     output_dir = Path('figs')
     output_dir.mkdir(exist_ok=True)
 
-    """Apply coordinate rotations to point z axis as up"""
-    Rz = np.array(([[0., -1., 0.],
-                    [1.,  0., 0.],
-                    [0.,  0., 1.]]))
-    Rx = np.array(([[1.,  0.,  0.],
-                    [0., -1.,  0.],
-                    [0.,  0., -1.]]))
-
-    p3ds_rotated = []
-    rotation = Rz @ Rx
-    for frame in p3ds:
-        frame_kpts_rotated = []
-        for hand_kpts in frame:
-            hand_kpts_rotated = []
-            for kpt in hand_kpts:
-                hand_kpts_rotated.append(rotation @ kpt)
-            frame_kpts_rotated.append(hand_kpts_rotated)
-        p3ds_rotated.append(frame_kpts_rotated)
-
     """this contains 3d points of each frame"""
-    p3ds_rotated = np.array(p3ds_rotated)
+    p3ds = np.array(p3ds)
 
     """Now visualize in 3D"""
     thumb_f = [[0,1],[1,2],[2,3],[3,4]]
@@ -207,7 +188,7 @@ def visualize_3d(p3ds):
     ax = fig.add_subplot(111, projection='3d')
     ax.view_init(elev=60, azim=0)
 
-    for i, frame_hands in enumerate(p3ds_rotated):
+    for i, frame_hands in enumerate(p3ds):
         if i%2 == 0: continue #skip every 2nd frame
         for hand_kpts in frame_hands:
             if np.all(hand_kpts[:, 0] == -1):
@@ -226,7 +207,7 @@ def visualize_3d(p3ds):
                         c=finger_color,
                     )
                     ax.set_box_aspect([1, 1, 1])
-                    ax.view_init(elev=30, azim=-45) 
+                    # ax.view_init(elev=30, azim=-75) 
 
         #draw axes
         ax.plot(xs = [0,1], ys = [0,0], zs = [0,0], linewidth = 2, color = 'red')
@@ -238,11 +219,11 @@ def visualize_3d(p3ds):
         ax.set_yticks([])
         ax.set_zticks([])
 
-        ax.set_xlim3d(-0.5, 0.5)
+        ax.set_xlim3d(-0.50, 0.5)
         ax.set_xlabel('x')
-        ax.set_ylim3d(-0.5, 1.0)
+        ax.set_ylim3d(-0.50, 0.5)
         ax.set_ylabel('y')
-        ax.set_zlim3d(-0.5, 1.0)
+        ax.set_zlim3d(-0.50, 0.5)
         ax.set_zlabel('z')
         # plt.savefig(output_dir / f'fig_{i}.png')
         plt.pause(0.01)

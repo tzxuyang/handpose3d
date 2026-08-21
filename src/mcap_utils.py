@@ -183,9 +183,9 @@ def build_hand_message_3d(timestamp, idx, left_right, handpoints):
             "bone_name": f"{prefix}_{name}",
             "to_global": {
                 "position": {
-                    "x": handpoints[i][0],
-                    "y": handpoints[i][1],
-                    "z": handpoints[i][2]
+                    "x": _to_builtin_scalar(handpoints[i][0]),
+                    "y": _to_builtin_scalar(handpoints[i][1]),
+                    "z": _to_builtin_scalar(handpoints[i][2])
                 }
             }
         }

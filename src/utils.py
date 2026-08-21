@@ -83,6 +83,9 @@ def triangulate(left_point, right_point, K0, T0, K1, T1):
     T1 = np.asarray(T1, dtype=np.float64).reshape(3, 1)
 
     identity = np.eye(3, dtype=np.float64)
+    # This helper assumes identity camera rotations and direct world-to-camera
+    # translations. For the stored `rot_trans_c*.dat` pose files, prefer
+    # `get_projection_matrix(...)` + `DLT(...)`, which use the full calibrated R/T.
     P0 = K0 @ np.hstack((identity, T0))
     P1 = K1 @ np.hstack((identity, T1))
 
@@ -145,7 +148,6 @@ def _convert_to_homogeneous(pts):
         return np.concatenate([pts, [1]], axis = 0)
 
 def get_projection_matrix(camera_id):
-
     #read camera parameters
     cmtx, dist = read_camera_parameters(camera_id)
     rvec, tvec = read_rotation_translation(camera_id)
