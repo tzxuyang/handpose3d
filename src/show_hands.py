@@ -155,7 +155,7 @@ def visualize_2d(video_path0, video_path1, handpoints0, handpoints1):
         cv.imshow('Camera 0', frame0)
         cv.imshow('Camera 1', frame1)
 
-        k = cv.waitKey(29) # Wait for 29 ms between frames
+        k = cv.waitKey(1) # Wait for 29 ms between frames
         if k & 0xFF == 27:  # ESC key to exit
             break
 
@@ -226,7 +226,7 @@ def visualize_3d(p3ds):
                         c=finger_color,
                     )
                     ax.set_box_aspect([1, 1, 1])
-                    # ax.view_init(elev=30, azim=-75) 
+                    ax.view_init(elev=30, azim=-45) 
 
         #draw axes
         ax.plot(xs = [0,1], ys = [0,0], zs = [0,0], linewidth = 2, color = 'red')
@@ -238,11 +238,11 @@ def visualize_3d(p3ds):
         ax.set_yticks([])
         ax.set_zticks([])
 
-        ax.set_xlim3d(-0.05, 0.05)
+        ax.set_xlim3d(-0.5, 0.5)
         ax.set_xlabel('x')
-        ax.set_ylim3d(-0.05, 0.1)
+        ax.set_ylim3d(-0.5, 1.0)
         ax.set_ylabel('y')
-        ax.set_zlim3d(-0.05, 0.1)
+        ax.set_zlim3d(-0.5, 1.0)
         ax.set_zlabel('z')
         # plt.savefig(output_dir / f'fig_{i}.png')
         plt.pause(0.01)

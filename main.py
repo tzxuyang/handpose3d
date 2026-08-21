@@ -11,7 +11,7 @@ from src.show_hands import visualize_2d, visualize_3d
 
 config_path = "./configs/ego_config.json"
 mcap_path = "/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap"
-mcap_path = "/home/yang/Downloads/0fa832d8c9814bd98ca33461f24a8bbf.mcap"
+# mcap_path = "/home/yang/Downloads/0fa832d8c9814bd98ca33461f24a8bbf.mcap"
 # mcap_path = '/Users/yangxu/Documents/Code/ff9e3e1189504041b9ce21256925377f.mcap'
 output_mp4 = "./processed_data/"
 output_mcap_path = "./mcap_output/hand_keypoints.mcap"

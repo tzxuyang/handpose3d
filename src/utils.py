@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import cv2
 import numpy as np
 from google.protobuf import descriptor_pb2
 from google.protobuf import json_format
@@ -67,6 +68,32 @@ def DLT(P1, P2, point1, point2):
     #print('Triangulated point: ')
     #print(Vh[3,0:3]/Vh[3,3])
     return Vh[3,0:3]/Vh[3,3]
+
+def triangulate(left_point, right_point, K0, T0, K1, T1):
+    """Triangulate one 3D point from two pixel observations.
+
+    Expected argument order:
+        triangulate(left_point, right_point, K0, T0, K1, T1)
+    """
+    left_point = np.asarray(left_point, dtype=np.float64).reshape(2, 1)
+    right_point = np.asarray(right_point, dtype=np.float64).reshape(2, 1)
+    K0 = np.asarray(K0, dtype=np.float64).reshape(3, 3)
+    T0 = np.asarray(T0, dtype=np.float64).reshape(3, 1)
+    K1 = np.asarray(K1, dtype=np.float64).reshape(3, 3)
+    T1 = np.asarray(T1, dtype=np.float64).reshape(3, 1)
+
+    identity = np.eye(3, dtype=np.float64)
+    P0 = K0 @ np.hstack((identity, T0))
+    P1 = K1 @ np.hstack((identity, T1))
+
+    point_4d = cv2.triangulatePoints(
+        P0,
+        P1,
+        np.ascontiguousarray(left_point),
+        np.ascontiguousarray(right_point),
+    )
+    point_3d = point_4d[:3] / point_4d[3]
+    return point_3d.reshape(3)
 
 def read_camera_parameters(camera_id):
 

@@ -500,8 +500,10 @@ def readmcap(mcap_path, config_path, output_path):
     R1 = quat_to_rot_matrix(qx_1, qy_1, qz_1, qw_1)
     T0 = T_b_c0[:3]
     T1 = T_b_c1[:3]
-    write_instrinsic_parameters("./camera_parameters/c0.dat", K0, DISTORTION)
-    write_instrinsic_parameters("./camera_parameters/c1.dat", K1, DISTORTION)
+    distortion0 = [msg_cam0.D[4], msg_cam0.D[5], 0, 0, 0]
+    distortion1 = [msg_cam1.D[4], msg_cam1.D[5], 0, 0, 0]
+    write_instrinsic_parameters("./camera_parameters/c0.dat", K0, distortion0)
+    write_instrinsic_parameters("./camera_parameters/c1.dat", K1, distortion1)
     write_extrinsic_parameters("./camera_parameters/rot_trans_c0.dat", R0, T0)
     write_extrinsic_parameters("./camera_parameters/rot_trans_c1.dat", R1, T1)
 
