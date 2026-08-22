@@ -1,3 +1,5 @@
+import os
+
 import cv2 as cv
 import mediapipe as mp
 import numpy as np
@@ -11,6 +13,7 @@ from utils import (
     read_camera_parameters,
     triangulate_rays,
     unproject_pixel,
+    rotate_points_around_z,
 )
 from pymcap import PyMCAP
 from pathlib import Path
@@ -196,7 +199,7 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
                         tvec1,
                         rmat1 @ ray1,
                     )
-                    _p3d = point_3d.astype(np.float32)
+                    _p3d = rotate_points_around_z(point_3d.astype(np.float32), 90)
                 hand_p3ds.append(_p3d)
             frame_p3ds.append(_filter_hand_points_3d(hand_p3ds))
 
@@ -264,6 +267,15 @@ def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestam
     file_paths = [f'processed_data/hand_keypoints_2d_cam{i}.mcap' for i in range(len(kpts_cam))] + ['processed_data/hand_keypoints_3d.mcap']
     # Use safe_merge_mcaps instead of PyMCAP.merge to avoid corrupting files via raw append
     safe_merge_mcaps(file_paths, output_path)
+    # Delete the individual files after merging
+    file_paths = [f'processed_data/hand_keypoints_2d_cam{i}.mcap' for i in range(len(kpts_cam))]
+    for file_path in file_paths:
+        try:
+            os.remove(file_path)
+        except FileNotFoundError:
+            print(f"Error: {file_path} does not exist.")
+        except PermissionError:
+            print(f"Error: You do not have permission to delete {file_path}.")
 
 if __name__ == '__main__':
 

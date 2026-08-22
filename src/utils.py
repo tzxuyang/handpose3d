@@ -1,3 +1,4 @@
+from ast import List
 import math
 from pathlib import Path
 
@@ -266,6 +267,23 @@ def transform_hand_ninety_degree(hand_frame_points):
     transformed_points[..., 0] *= -1.0
     return transformed_points
 
+def rotate_points_around_z(points:List, angle_degrees):
+    """ Rotate a set of 3D points around the Z-axis by a specified angle in degrees.
+    input:
+        points: A 3D points in list (each point is a list of [x, y, z]).
+        angle_degrees: The angle in degrees to rotate the points around the Z-axis.
+    output:
+        A rotated 3D points in list (each point is a list of [x, y, z]).: 
+    """
+    points = np.asarray(points, dtype=np.float32)
+    angle_radians = np.radians(angle_degrees)
+    rotation_matrix = np.array([
+        [np.cos(angle_radians), -np.sin(angle_radians), 0],
+        [np.sin(angle_radians),  np.cos(angle_radians), 0],
+        [0,                     0,                      1]
+    ])
+    rotated_points = np.dot(points, rotation_matrix.T).tolist()
+    return rotated_points
 
 def draw_hand_3d(ax, hand_points, color, marker='o', linewidth=2, point_size=30, alpha=0.85):
     hand_points = np.asarray(hand_points, dtype=np.float32)

@@ -173,7 +173,7 @@ def visualize_3d(p3ds):
     ax.view_init(elev=20, azim=-60)
 
     for i, frame_hands in enumerate(p3ds):
-        frame_hands = transform_hand_ninety_degree(frame_hands)
+        # frame_hands = transform_hand_ninety_degree(frame_hands)
         for hand_kpts in frame_hands:
             draw_hand_3d(ax, hand_kpts, color='blue', marker='o')
 

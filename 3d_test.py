@@ -95,7 +95,7 @@ def build_comparison_frames(generated_mcap_path, ground_truth_mcap_path):
             ground_truth_frames,
             ground_truth_timestamps,
         )
-        generated_points = transform_hand_ninety_degree(generated_points)
+        # generated_points = transform_hand_ninety_degree(generated_points)
         comparison_frames.append(
             {
                 "generated_timestamp": generated_timestamp,
