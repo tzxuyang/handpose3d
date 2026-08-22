@@ -36,8 +36,7 @@ write the intrinsic calibration to c0.dat and extrinsic calibration (rotation R 
 use mediapipe from google to detect 2D handpoint in pixels (x, y), the 2D result are composed as a list of size (2, 21, 2)
 
 ***2D handpoint undistortion
-The camera is distorted (calibration shall be saved in c0.dat, and c1.dat). The cv2.undistortPoints() function to get undistorted 2D data point
+The EgoScale camera_info messages use the `ds` (double-sphere) camera model. The calibration is saved in `c0.dat` and `c1.dat` together with the distortion model, and each 2D keypoint is unprojected into a camera ray using that double-sphere model. For non-`ds` cameras the code falls back to `cv2.undistortPoints()`.
 
 ***3D projection
-use 2D handpoint detected from two cameras, and the intrinsic and extrinsic parameters from the two cameras (left cam & right cam) to project 2D coordinates into 3D coordinates
-
+Use the 2D handpoints from the two cameras, unproject them into rays, rotate those rays into the shared body frame with `T_b_c`, and triangulate the midpoint of the closest points between the two camera rays. This uses the full extrinsic calibration from `/robot0/sensor/camera1/camera_info` and `/robot0/sensor/camera4/camera_info`, instead of a simplified baseline-only pinhole projection.

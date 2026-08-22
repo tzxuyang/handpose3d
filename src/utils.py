@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import cv2
@@ -99,24 +100,30 @@ def triangulate(left_point, right_point, K0, T0, K1, T1):
     return point_3d.reshape(3)
 
 def read_camera_parameters(camera_id):
+    with open('camera_parameters/c' + str(camera_id) + '.dat', 'r') as inf:
+        cmtx = []
 
-    inf = open('camera_parameters/c' + str(camera_id) + '.dat', 'r')
+        if inf.readline().strip() != 'intrinsic:':
+            raise ValueError(f'camera_parameters/c{camera_id}.dat is missing the intrinsic header.')
 
-    cmtx = []
-    dist = []
+        for _ in range(3):
+            line = [float(en) for en in inf.readline().split()]
+            cmtx.append(line)
 
-    line = inf.readline()
-    for _ in range(3):
-        line = inf.readline().split()
-        line = [float(en) for en in line]
-        cmtx.append(line)
+        distortion_model = 'plumb_bob'
+        line = inf.readline().strip()
+        if line == 'distortion_model:':
+            distortion_model = inf.readline().strip()
+            line = inf.readline().strip()
 
-    line = inf.readline()
-    line = inf.readline().split()
-    line = [float(en) for en in line]
-    dist.append(line)
+        if line != 'distortion:':
+            raise ValueError(
+                f'camera_parameters/c{camera_id}.dat is missing the distortion header, got {line!r}.'
+            )
 
-    return np.array(cmtx), np.array(dist)
+        dist = [float(en) for en in inf.readline().split()]
+
+    return np.array(cmtx), np.array(dist, dtype=np.float64), distortion_model
 
 def read_rotation_translation(camera_id, savefolder = 'camera_parameters/'):
 
@@ -149,7 +156,7 @@ def _convert_to_homogeneous(pts):
 
 def get_projection_matrix(camera_id):
     #read camera parameters
-    cmtx, dist = read_camera_parameters(camera_id)
+    cmtx, _, _ = read_camera_parameters(camera_id)
     rvec, tvec = read_rotation_translation(camera_id)
 
     #calculate projection matrix
@@ -165,15 +172,79 @@ def write_keypoints_to_disk(filename, kpts):
                 fout.write(' '.join(str(value) for value in kpt) + ' ')
             fout.write('\n')
 
-def write_instrinsic_parameters(file_path, K, dist):
+def write_instrinsic_parameters(file_path, K, dist, distortion_model="plumb_bob"):
     with open(file_path, 'w') as f:
         f.write("intrinsic:\n")
-        for i in range(len(K)):
-            if i % 3 == 0:
-                f.write(' '.join(str(parameter) for parameter in K[i:i+3]))
-                f.write('\n')
+        K = np.asarray(K, dtype=np.float64).reshape(3, 3)
+        for row in K:
+            f.write(' '.join(str(parameter) for parameter in row))
+            f.write('\n')
+        f.write("distortion_model:\n")
+        f.write(f"{distortion_model}\n")
         f.write("distortion:\n")
-        f.write(' '.join(str(value) for value in dist) + '\n')
+        f.write(' '.join(str(value) for value in np.asarray(dist, dtype=np.float64).reshape(-1)) + '\n')
+
+
+def unproject_pixel(point, camera_matrix, distortion, distortion_model="plumb_bob"):
+    point = np.asarray(point, dtype=np.float64).reshape(2)
+    camera_matrix = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3)
+    distortion = np.asarray(distortion, dtype=np.float64).reshape(-1)
+
+    if distortion_model == "ds":
+        if distortion.size < 6:
+            raise ValueError(
+                f'Double-sphere distortion expects 6 parameters [fx, fy, cx, cy, xi, alpha], got {distortion.size}.'
+            )
+
+        fx, fy, cx, cy, xi, alpha = distortion[:6]
+        mx = (point[0] - cx) / fx
+        my = (point[1] - cy) / fy
+        r2 = mx * mx + my * my
+        discriminant = 1.0 - (2.0 * alpha - 1.0) * r2
+        if discriminant <= 0.0:
+            return None
+
+        sqrt_discriminant = math.sqrt(discriminant)
+        denominator = alpha * sqrt_discriminant + (1.0 - alpha)
+        if abs(denominator) < 1e-12:
+            return None
+
+        mz = (1.0 - alpha * alpha * r2) / denominator
+        inner = mz * mz + (1.0 - xi * xi) * r2
+        if inner < 0.0:
+            return None
+
+        scale = (mz * xi + math.sqrt(inner)) / (mz * mz + r2)
+        ray = np.array([scale * mx, scale * my, scale * mz - xi], dtype=np.float64)
+    else:
+        undistorted = cv2.undistortPoints(
+            np.ascontiguousarray(point.reshape(1, 1, 2)),
+            camera_matrix,
+            distortion,
+        ).reshape(2)
+        ray = np.array([undistorted[0], undistorted[1], 1.0], dtype=np.float64)
+
+    norm = np.linalg.norm(ray)
+    if norm < 1e-12:
+        return None
+
+    return ray / norm
+
+
+def triangulate_rays(camera_center0, ray0, camera_center1, ray1):
+    camera_center0 = np.asarray(camera_center0, dtype=np.float64).reshape(3)
+    camera_center1 = np.asarray(camera_center1, dtype=np.float64).reshape(3)
+    ray0 = np.asarray(ray0, dtype=np.float64).reshape(3)
+    ray1 = np.asarray(ray1, dtype=np.float64).reshape(3)
+
+    ray0 /= np.linalg.norm(ray0)
+    ray1 /= np.linalg.norm(ray1)
+
+    system = np.column_stack((ray0, -ray1))
+    offsets, _, _, _ = np.linalg.lstsq(system, camera_center1 - camera_center0, rcond=None)
+    point_on_ray0 = camera_center0 + offsets[0] * ray0
+    point_on_ray1 = camera_center1 + offsets[1] * ray1
+    return 0.5 * (point_on_ray0 + point_on_ray1)
 
 def write_extrinsic_parameters(file_path, R, T):
     with open(file_path, 'w') as f:
