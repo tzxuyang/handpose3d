@@ -8,6 +8,14 @@ from google.protobuf import json_format
 from google.protobuf import struct_pb2
 from mcap.writer import Writer
 
+HAND_BONE_CONNECTIONS = (
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (0, 9), (9, 10), (10, 11), (11, 12),
+    (0, 13), (13, 14), (14, 15), (15, 16),
+    (0, 17), (17, 18), (18, 19), (19, 20),
+)
+
 def msg_time_sync(ref_msg, target_msg):
     """
     Synchronize the target message to the reference message based on timestamps.
@@ -245,6 +253,61 @@ def triangulate_rays(camera_center0, ray0, camera_center1, ray1):
     point_on_ray0 = camera_center0 + offsets[0] * ray0
     point_on_ray1 = camera_center1 + offsets[1] * ray1
     return 0.5 * (point_on_ray0 + point_on_ray1)
+
+
+def is_valid_hand_point(point):
+    point = np.asarray(point, dtype=np.float32)
+    return np.all(point != -1.0) and not np.allclose(point, 0.0)
+
+
+def transform_hand_ninety_degree(hand_frame_points):
+    transformed_points = np.asarray(hand_frame_points, dtype=np.float32).copy()
+    transformed_points[..., [0, 1]] = transformed_points[..., [1, 0]]
+    transformed_points[..., 0] *= -1.0
+    return transformed_points
+
+
+def draw_hand_3d(ax, hand_points, color, marker='o', linewidth=2, point_size=30, alpha=0.85):
+    hand_points = np.asarray(hand_points, dtype=np.float32)
+
+    for start_idx, end_idx in HAND_BONE_CONNECTIONS:
+        start_point = hand_points[start_idx]
+        end_point = hand_points[end_idx]
+        if not (is_valid_hand_point(start_point) and is_valid_hand_point(end_point)):
+            continue
+
+        ax.plot(
+            [start_point[0], end_point[0]],
+            [start_point[1], end_point[1]],
+            [start_point[2], end_point[2]],
+            color=color,
+            linewidth=linewidth,
+            alpha=alpha,
+        )
+
+    valid_points = np.asarray(
+        [point for point in hand_points if is_valid_hand_point(point)],
+        dtype=np.float32,
+    )
+    if valid_points.size == 0:
+        return
+
+    ax.scatter(
+        valid_points[:, 0],
+        valid_points[:, 1],
+        valid_points[:, 2],
+        color=color,
+        marker=marker,
+        s=point_size,
+        alpha=min(alpha + 0.05, 1.0),
+    )
+
+
+def configure_hand_3d_axes(ax, xlim=(-0.5, 0.5), ylim=(-0.5, 0.5), zlim=(-1.0, 0.0)):
+    ax.set_xlim3d(*xlim)
+    ax.set_ylim3d(*ylim)
+    ax.set_zlim3d(*zlim)
+    ax.set_box_aspect([1, 1, 1])
 
 def write_extrinsic_parameters(file_path, R, T):
     with open(file_path, 'w') as f:

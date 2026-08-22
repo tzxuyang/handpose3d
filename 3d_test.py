@@ -13,14 +13,9 @@ from mcap_protobuf.decoder import DecoderFactory
 project_root = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(project_root, "src"))
 
+from utils import configure_hand_3d_axes, draw_hand_3d, transform_hand_ninety_degree
+
 HAND_TOPICS = ("/robot0/handtracking/left", "/robot0/handtracking/right")
-HAND_CONNECTIONS = (
-    (0, 1), (1, 2), (2, 3), (3, 4),
-    (0, 5), (5, 6), (6, 7), (7, 8),
-    (0, 9), (9, 10), (10, 11), (11, 12),
-    (0, 13), (13, 14), (14, 15), (15, 16),
-    (0, 17), (17, 18), (18, 19), (19, 20),
-)
 
 
 @dataclass
@@ -88,65 +83,6 @@ def _find_nearest_frame(timestamp, frames, frame_timestamps):
     best_index = min(candidate_indices, key=lambda idx: abs(int(frame_timestamps[idx]) - timestamp))
     return frames[best_index]
 
-
-def _point_is_valid(point):
-    return np.all(point != -1.0) and not np.allclose(point, 0.0)
-
-
-def _draw_hand(ax, hand_points, color, marker):
-    for start_idx, end_idx in HAND_CONNECTIONS:
-        start_point = hand_points[start_idx]
-        end_point = hand_points[end_idx]
-        if not (_point_is_valid(start_point) and _point_is_valid(end_point)):
-            continue
-
-        ax.plot(
-            [start_point[0], end_point[0]],
-            [start_point[1], end_point[1]],
-            [start_point[2], end_point[2]],
-            color=color,
-            linewidth=2,
-            alpha=0.85,
-        )
-
-    valid_points = np.asarray([point for point in hand_points if _point_is_valid(point)], dtype=np.float32)
-    if valid_points.size == 0:
-        return
-
-    ax.scatter(
-        valid_points[:, 0],
-        valid_points[:, 1],
-        valid_points[:, 2],
-        color=color,
-        marker=marker,
-        s=30,
-        alpha=0.9,
-    )
-
-
-def _set_equal_axes(ax, point_sets):
-    valid_points = []
-    for points in point_sets:
-        for hand_points in points:
-            valid_points.extend([point for point in hand_points if _point_is_valid(point)])
-
-    if not valid_points:
-        ax.set_xlim3d(-0.5, 0.5)
-        ax.set_ylim3d(-0.5, 0.5)
-        ax.set_zlim3d(-0.8, 0.1)
-        return
-
-    valid_points = np.asarray(valid_points, dtype=np.float32)
-    mins = valid_points.min(axis=0)
-    maxs = valid_points.max(axis=0)
-    center = (mins + maxs) / 2.0
-    radius = max(np.max(maxs - mins) / 2.0, 0.08) + 0.03
-
-    ax.set_xlim3d(center[0] - radius, center[0] + radius)
-    ax.set_ylim3d(center[1] - radius, center[1] + radius)
-    ax.set_zlim3d(center[2] - radius, center[2] + radius)
-
-
 def build_comparison_frames(generated_mcap_path, ground_truth_mcap_path):
     generated_frames = _read_hand_frames(generated_mcap_path, _read_generated_topic)
     ground_truth_frames = _read_hand_frames(ground_truth_mcap_path, _read_ground_truth_topic)
@@ -159,6 +95,7 @@ def build_comparison_frames(generated_mcap_path, ground_truth_mcap_path):
             ground_truth_frames,
             ground_truth_timestamps,
         )
+        generated_points = transform_hand_ninety_degree(generated_points)
         comparison_frames.append(
             {
                 "generated_timestamp": generated_timestamp,
@@ -194,11 +131,11 @@ def visualize_comparison(comparison_frames, pause, stride, max_frames=None):
         ground_truth_points = frame["ground_truth_points"]
 
         for hand_points in generated_points:
-            _draw_hand(ax, hand_points, color="blue", marker="o")
+            draw_hand_3d(ax, hand_points, color="blue", marker="o")
         for hand_points in ground_truth_points:
-            _draw_hand(ax, hand_points, color="red", marker="x")
+            draw_hand_3d(ax, hand_points, color="red", marker="x")
 
-        _set_equal_axes(ax, [generated_points, ground_truth_points])
+        configure_hand_3d_axes(ax)
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("z")

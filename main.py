@@ -53,7 +53,7 @@ if __name__ == "__main__":
         # read the input mcap file of camera videos and visualize the 2D hand keypoints
         video_stream_0 = f'processed_data/camera1.mp4'
         video_stream_1 = f'processed_data/camera4.mp4'
-        print(handpoints_2d_topic[1])
+        # print(handpoints_2d_topic[1])
         msg_2d_0 = read_mcap_json(config.visualize_mcap_path, handpoints_2d_topic[1])
         msg_2d_1 = read_mcap_json(config.visualize_mcap_path, handpoints_2d_topic[4])
 
@@ -65,7 +65,7 @@ if __name__ == "__main__":
         for frame in msg_2d_1:
             kpts = read_hand_json_2d(frame)
             p2ds_1.append(kpts)
-        # visualize_2d(video_stream_0, video_stream_1, p2ds_0, p2ds_1)
+        visualize_2d(video_stream_0, video_stream_1, p2ds_0, p2ds_1)
 
         # read the input mcap file of 3d points and visualize the 3D hand keypoints
         msg_left = read_mcap_json(config.visualize_mcap_path, handpoints_3d_topic[0])
@@ -75,7 +75,7 @@ if __name__ == "__main__":
         for frame_left, frame_right in zip(msg_left, msg_right):
             left_kpts = read_hand_json_3d(frame_left)
             right_kpts = read_hand_json_3d(frame_right)
-            print(f"left_kpts: {left_kpts}, right_kpts: {right_kpts}")
+            # print(f"left_kpts: {left_kpts}, right_kpts: {right_kpts}")
             p3ds.append([left_kpts, right_kpts])
 
         visualize_3d(p3ds)

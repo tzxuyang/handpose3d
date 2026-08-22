@@ -4,7 +4,7 @@ import cv2 as cv
 import mediapipe as mp
 from pathlib import Path
 from mediapipe.framework.formats import landmark_pb2
-from utils import DLT
+from utils import configure_hand_3d_axes, draw_hand_3d, transform_hand_ninety_degree
 
 NUM_HAND_KEYPOINTS = 21
 mp_drawing = mp.solutions.drawing_utils
@@ -122,15 +122,11 @@ def visualize_2d(video_path0, video_path1, handpoints0, handpoints1):
         frame1_handpoints = np.asarray(frame_handpoints1, dtype=float)
 
         for hand_idx, hand_keypoints in enumerate(frame0_handpoints):
-            print(f"frame shape {frame0.shape}")
             if np.all(hand_keypoints[:, 0] == -1):
                 continue
 
             hand_landmarks = hand_points_to_mp_landmarks(hand_keypoints, frame0.shape)
 
-            if frame_index == 10:
-                print(f"hand keypoints {hand_keypoints}")
-                print(f"hand landmarks {hand_landmarks}")
             color = LEFT_HAND_COLOR if hand_idx == 0 else RIGHT_HAND_COLOR
             mp_drawing.draw_landmarks(
                 frame0,
@@ -170,62 +166,22 @@ def visualize_3d(p3ds):
     output_dir = Path('figs')
     output_dir.mkdir(exist_ok=True)
 
-    """this contains 3d points of each frame"""
     p3ds = np.array(p3ds)
-
-    """Now visualize in 3D"""
-    thumb_f = [[0,1],[1,2],[2,3],[3,4]]
-    index_f = [[0,5],[5,6],[6,7],[7,8]]
-    middle_f = [[0,9],[9,10],[10,11],[11, 12]]
-    ring_f = [[0,13],[13,14],[14,15],[15,16]]
-    pinkie_f = [[0,17],[17,18],[18,19],[19,20]]
-    fingers = [pinkie_f, ring_f, middle_f, index_f, thumb_f]
-    fingers_colors = ['blue', 'blue', 'blue', 'blue', 'blue']
-
-    from mpl_toolkits.mplot3d import Axes3D
 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    ax.view_init(elev=60, azim=0)
+    ax.view_init(elev=20, azim=-60)
 
     for i, frame_hands in enumerate(p3ds):
-        if i%2 == 0: continue #skip every 2nd frame
+        frame_hands = transform_hand_ninety_degree(frame_hands)
         for hand_kpts in frame_hands:
-            if np.all(hand_kpts[:, 0] == -1):
-                continue
+            draw_hand_3d(ax, hand_kpts, color='blue', marker='o')
 
-            for finger, finger_color in zip(fingers, fingers_colors):
-                for _c in finger:
-                    if np.any(hand_kpts[_c[0]] == -1) or np.any(hand_kpts[_c[1]] == -1):
-                        continue
-
-                    ax.plot(
-                        xs=[hand_kpts[_c[0], 0], hand_kpts[_c[1], 0]],
-                        ys=[hand_kpts[_c[0], 1], hand_kpts[_c[1], 1]],
-                        zs=[hand_kpts[_c[0], 2], hand_kpts[_c[1], 2]],
-                        linewidth=4,
-                        c=finger_color,
-                    )
-                    ax.set_box_aspect([1, 1, 1])
-                    # ax.view_init(elev=30, azim=-75) 
-
-        #draw axes
-        ax.plot(xs = [0,1], ys = [0,0], zs = [0,0], linewidth = 2, color = 'red')
-        ax.plot(xs = [0,0], ys = [0,1], zs = [0,0], linewidth = 2, color = 'blue')
-        ax.plot(xs = [0,0], ys = [0,0], zs = [0,1], linewidth = 2, color = 'black')
-
-        #ax.set_axis_off()
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_zticks([])
-
-        ax.set_xlim3d(-0.50, 0.5)
+        configure_hand_3d_axes(ax)
         ax.set_xlabel('x')
-        ax.set_ylim3d(-0.50, 0.5)
         ax.set_ylabel('y')
-        ax.set_zlim3d(-0.50, 0.5)
         ax.set_zlabel('z')
-        # plt.savefig(output_dir / f'fig_{i}.png')
+        ax.set_title(f'Generated handpoints\nframe={i}')
         plt.pause(0.01)
         ax.cla()
 
