@@ -17,6 +17,7 @@ from utils import (
 )
 from pymcap import PyMCAP
 from pathlib import Path
+from tools.kalman_filter_3d import Hand3DKalmanFilter
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -24,9 +25,8 @@ mp_hands = mp.solutions.hands
 frame_shape = [1300, 1600]
 HAND_LABELS = ('Left', 'Right')
 NUM_HAND_KEYPOINTS = 21
-BLUE = (255, 0, 0)
-RED = (0, 0, 255)
-
+BLUE = (255, 0, 0) #BLUE in BGR
+RED = (0, 0, 255) # RED in BGR
 
 def _empty_frame_keypoints(num_hands, point_dim):
     return [[[-1] * point_dim for _ in range(NUM_HAND_KEYPOINTS)] for _ in range(num_hands)]
@@ -116,7 +116,7 @@ def _filter_hand_points_3d(hand_points_3d):
     return filtered_points
 
 
-def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
+def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False,timestamps=None):
     #read camera parameters
     cmtx0, dist0, distortion_model0 = read_camera_parameters(0)
     cmtx1, dist1, distortion_model1 = read_camera_parameters(1)
@@ -142,6 +142,15 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     for i in range(len(hands)):
         kpts_cam.append([])
     kpts_3d = []
+
+    # Initialize Kalman filters for right and left hands
+    right_hand_kalman = Hand3DKalmanFilter(
+        num_points=NUM_HAND_KEYPOINTS,
+    )
+
+    left_hand_kalman = Hand3DKalmanFilter(
+        num_points=NUM_HAND_KEYPOINTS,
+    )
 
     frame_idx = 0
     while True:
@@ -208,6 +217,55 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         For real time application, this is what you want.
         '''
         frame_p3ds = np.array(frame_p3ds).reshape((len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3))
+        raw_frame_p3ds = frame_p3ds.copy()
+
+        dt = 1.0 / 30.0
+        if timestamps is not None and 0 < frame_idx < len(timestamps):
+            timestamp_delta_ns = (
+                int(timestamps[frame_idx])
+                - int(timestamps[frame_idx - 1])
+            )
+            measured_dt = timestamp_delta_ns * 1e-9
+
+            if 0.0 < measured_dt <= 0.1:
+                dt = measured_dt
+
+
+        frame_p3ds[0] = left_hand_kalman.update(frame_p3ds[0], dt)
+        frame_p3ds[1] = right_hand_kalman.update(frame_p3ds[1], dt)
+
+#---------------------------------------------------------------------------------------------------
+        if frame_idx % 30 == 0:
+            for hand_idx, hand_label in enumerate(HAND_LABELS):
+                raw_points = raw_frame_p3ds[hand_idx]
+                filtered_points = frame_p3ds[hand_idx]
+
+                raw_valid = np.all(raw_points != -1, axis=1)
+                filtered_valid = np.all(filtered_points != -1, axis=1)
+                common_valid = raw_valid & filtered_valid
+                predicted_only = ~raw_valid & filtered_valid
+
+                mean_delta = 0.0
+                if np.any(common_valid):
+                    mean_delta = np.mean(
+                        np.linalg.norm(
+                            filtered_points[common_valid]
+                            - raw_points[common_valid],
+                            axis=1,
+                        )
+                    )
+
+                print(
+                    f"frame={frame_idx}, hand={hand_label}, "
+                    f"raw={np.sum(raw_valid)}, "
+                    f"filtered={np.sum(filtered_valid)}, "
+                    f"predicted={np.sum(predicted_only)}, "
+                    f"predicted_indices={np.flatnonzero(predicted_only).tolist()}, "
+                    f"mean_delta={mean_delta:.6f},"
+                    f"dt={dt:.6f}"
+                )
+#---------------------------------------------------------------------------------------------------
+
         kpts_3d.append(frame_p3ds)
 
         # Draw the hand annotations on the image.
@@ -249,7 +307,7 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
 def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestamps=None, visualize=False):
     input_streams = streams
 
-    kpts_cam, kpts_3d = run_mp(input_streams, None, None, cam_3d_ids, visualize)
+    kpts_cam, kpts_3d = run_mp(input_streams, None, None, cam_3d_ids, visualize,timestamps=timestamps)
     
     kpts_cam = np.array(kpts_cam)
 
