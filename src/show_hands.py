@@ -10,9 +10,17 @@ NUM_HAND_KEYPOINTS = 21
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
 HAND_CONNECTIONS = tuple(mp_hands.HAND_CONNECTIONS)
-LEFT_HAND_COLOR = (0, 0, 255)
-RIGHT_HAND_COLOR = (255, 0, 0)
+# LEFT_HAND_COLOR = (0, 0, 255)
+# RIGHT_HAND_COLOR = (255, 0, 0)
+LEFT_HAND_COLOR = (255, 0, 0)   # Blue in BGR
+RIGHT_HAND_COLOR = (0, 0, 255)  # Red in BGR
+
 frame_shape = [1300, 1600]
+
+fps = 30
+frame_interval = 1.0 / fps
+speed_factor = 4.0
+playback_fps = fps * speed_factor
 
 
 def read_keypoints(filename, point_dim=3):
@@ -151,7 +159,8 @@ def visualize_2d(video_path0, video_path1, handpoints0, handpoints1):
         cv.imshow('Camera 0', frame0)
         cv.imshow('Camera 1', frame1)
 
-        k = cv.waitKey(1) # Wait for 29 ms between frames
+        delay_ms = round(1000 / playback_fps) 
+        k = cv.waitKey(delay_ms) # Wait for 29 ms between frames
         if k & 0xFF == 27:  # ESC key to exit
             break
 
@@ -182,7 +191,9 @@ def visualize_3d(p3ds):
         ax.set_ylabel('y')
         ax.set_zlabel('z')
         ax.set_title(f'Generated handpoints\nframe={i}')
-        plt.pause(0.01)
+
+        plt.pause(1.0 / playback_fps)
+        
         ax.cla()
 
 

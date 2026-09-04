@@ -10,6 +10,7 @@ from src.mcap_utils import read_hand_json_2d, read_hand_json_3d, read_hand_messa
 from src.handpose3d import handpose3d
 from src.show_hands import visualize_2d, visualize_3d
 import tyro
+import numpy as np
 
 @dataclass
 class Config:
@@ -40,7 +41,9 @@ if __name__ == "__main__":
         msg_imu_synced, timestamps, height, width = readmcap(config.mcap_path, config_path, output_mp4)
 
         # detect hand keypoints in 2D and 3D using mediapipe for each camera frame
-        imu_pts = calculate_position_from_imu(msg_imu_synced)
+        # imu_pts = calculate_position_from_imu(msg_imu_synced)
+        imu_pts = 1
+        
         input_streams = [f'processed_data/camera{i}.mp4' for i in range(6)]
         handpose3d(input_streams, output_mcap_path, cam_3d_ids=[1, 4], imu_pts=imu_pts, timestamps=timestamps, visualize=True)
     elif config.mode == "visualize":
@@ -61,11 +64,13 @@ if __name__ == "__main__":
         for frame in msg_2d_0:
             kpts = read_hand_json_2d(frame)
             p2ds_0.append(kpts)
+
         p2ds_1 = []
         for frame in msg_2d_1:
             kpts = read_hand_json_2d(frame)
             p2ds_1.append(kpts)
         visualize_2d(video_stream_0, video_stream_1, p2ds_0, p2ds_1)
+        
 
         # read the input mcap file of 3d points and visualize the 3D hand keypoints
         msg_left = read_mcap_json(config.visualize_mcap_path, handpoints_3d_topic[0])

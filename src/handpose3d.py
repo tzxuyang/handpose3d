@@ -17,6 +17,7 @@ from utils import (
 )
 from pymcap import PyMCAP
 from pathlib import Path
+from tools.kalman_filter_3d import Hand3DKalmanFilter
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -31,12 +32,23 @@ RED = (0, 0, 255)
 def _empty_frame_keypoints(num_hands, point_dim):
     return [[[-1] * point_dim for _ in range(NUM_HAND_KEYPOINTS)] for _ in range(num_hands)]
 
+def get_physical_hand_label(mp_label):
+    """Media Pipe hypothesis that the input is mirrored. But the DAS ego's input is not mirrored, so we need to swap the labels."""
+    if mp_label == "Right":
+        return "Left"
+    elif mp_label == "Left":
+        return "Right"
+    return mp_label
 
 def _get_hand_slot(results, detected_index, filled_slots):
+    """Get the physical hand slot for the detected hand."""
     if results.multi_handedness and detected_index < len(results.multi_handedness):
-        label = results.multi_handedness[detected_index].classification[0].label
-        if label in HAND_LABELS:
-            preferred_slot = HAND_LABELS.index(label)
+        mp_label = results.multi_handedness[detected_index].classification[0].label
+        physical_label = get_physical_hand_label(mp_label)
+
+        if physical_label in HAND_LABELS:
+            preferred_slot = HAND_LABELS.index(physical_label)
+
             if preferred_slot not in filled_slots:
                 return preferred_slot
 
@@ -115,7 +127,6 @@ def _filter_hand_points_3d(hand_points_3d):
 
     return filtered_points
 
-
 def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     #read camera parameters
     cmtx0, dist0, distortion_model0 = read_camera_parameters(0)
@@ -142,6 +153,12 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     for i in range(len(hands)):
         kpts_cam.append([])
     kpts_3d = []
+
+    #3d kalman filter
+    hand_kalman_filters = [
+    Hand3DKalmanFilter(num_points=NUM_HAND_KEYPOINTS)
+    for _ in range(len(HAND_LABELS))
+    ]
 
     frame_idx = 0
     while True:
@@ -217,18 +234,60 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         frame[cam_ids[1]] = cv.cvtColor(frame[cam_ids[1]], cv.COLOR_RGB2BGR)
 
         if results[cam_ids[0]].multi_hand_landmarks:
-          for i, hand_landmarks in enumerate(results[cam_ids[0]].multi_hand_landmarks):
-            if i == 0:
-                mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
-            else:
-                mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+            for i, hand_landmarks in enumerate(results[cam_ids[0]].multi_hand_landmarks):
+                # if i == 0:
+                #     mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
+                # else:
+                #     mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+
+                handedness = results[cam_ids[0]].multi_handedness[i]
+                classification = handedness.classification[0]
+
+                mp_label = classification.label
+                score = classification.score
+
+                physical_label = get_physical_hand_label(mp_label)
+
+                if physical_label == "Right":
+                    color = RED
+                elif physical_label == "Left":
+                    color = BLUE
+
+                mp_drawing.draw_landmarks(
+                    frame[cam_ids[0]],
+                    hand_landmarks,
+                    mp_hands.HAND_CONNECTIONS,
+                    mp_drawing.DrawingSpec(color=color),
+                )
+
 
         if results[cam_ids[1]].multi_hand_landmarks:
-          for i, hand_landmarks in enumerate(results[cam_ids[1]].multi_hand_landmarks):
-            if i == 0:
-                mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
-            else:
-                mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+            for i, hand_landmarks in enumerate(results[cam_ids[1]].multi_hand_landmarks):
+                # if i == 0:
+                #     mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
+                # else:
+                #     mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+
+                handedness = results[cam_ids[1]].multi_handedness[i]
+                classification = handedness.classification[0]
+
+                mp_label = classification.label
+                score = classification.score
+                physical_label = get_physical_hand_label(mp_label)
+
+                if physical_label == "Right":
+                    color = RED
+                elif physical_label == "Left":
+                    color = BLUE
+
+                mp_drawing.draw_landmarks(
+                    frame[cam_ids[1]],
+                    hand_landmarks,
+                    mp_hands.HAND_CONNECTIONS,
+                    mp_drawing.DrawingSpec(color=color),
+                )
+
+
 
         if visualize:
             cv.imshow('cam1', frame[cam_ids[1]])
