@@ -21,7 +21,7 @@ HAND_TOPICS = ("/robot0/handtracking/left", "/robot0/handtracking/right")
 @dataclass
 class Config:
     generated_mcap_path: str = "./mcap_output/hand_keypoints.mcap"
-    ground_truth_mcap_path: str = "/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap"
+    ground_truth_mcap_path: str = "/home/ubuntu/handpose3D_test/groundTruth_data/ff9e3e1189504041b9ce21256925377f.mcap"
     pause: float = 0.03
     stride: int = 1
     max_frames: int | None = None

@@ -17,7 +17,7 @@ from utils import (
 )
 from pymcap import PyMCAP
 from pathlib import Path
-from tools.kalman_filter_3d import Hand3DKalmanFilter
+# from tools.kalman_filter_3d import Hand3DKalmanFilter
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -155,10 +155,10 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     kpts_3d = []
 
     #3d kalman filter
-    hand_kalman_filters = [
-    Hand3DKalmanFilter(num_points=NUM_HAND_KEYPOINTS)
-    for _ in range(len(HAND_LABELS))
-    ]
+    # hand_kalman_filters = [
+    # Hand3DKalmanFilter(num_points=NUM_HAND_KEYPOINTS)
+    # for _ in range(len(HAND_LABELS))
+    # ]
 
     frame_idx = 0
     while True:

@@ -14,7 +14,9 @@ import numpy as np
 
 @dataclass
 class Config:
-    mcap_path: str = "/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap"
+    
+    # mcap_path: str = "/home/yang/Downloads/ff9e3e1189504041b9ce21256925377f.mcap"
+    mcap_path: str = "/home/ubuntu/handpose3D_test/groundTruth_data/ff9e3e1189504041b9ce21256925377f.mcap"
     mode: str = "visualize"  # "process" or "visualize"
     visualize_mcap_path: str = "./mcap_output/hand_keypoints.mcap"
 
