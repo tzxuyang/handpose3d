@@ -18,6 +18,9 @@ from utils import (
 from pymcap import PyMCAP
 from pathlib import Path
 # from tools.kalman_filter_3d import Hand3DKalmanFilter
+from show_hands import hand_points_to_mp_landmarks
+from mediapipe.framework.formats import landmark_pb2
+from tools.detect_hand import _get_hand_slot
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -40,44 +43,405 @@ def get_physical_hand_label(mp_label):
         return "Right"
     return mp_label
 
-def _get_hand_slot(results, detected_index, filled_slots):
-    """Get the physical hand slot for the detected hand."""
-    if results.multi_handedness and detected_index < len(results.multi_handedness):
-        mp_label = results.multi_handedness[detected_index].classification[0].label
-        physical_label = get_physical_hand_label(mp_label)
-
-        if physical_label in HAND_LABELS:
-            preferred_slot = HAND_LABELS.index(physical_label)
-
-            if preferred_slot not in filled_slots:
-                return preferred_slot
-
-    for slot in range(len(HAND_LABELS)):
-        if slot not in filled_slots:
-            return slot
-
-    return None
 
 
-def _extract_frame_keypoints(results, frame, point_dim):
+
+
+
+# def _get_hand_slot(results, detected_index, filled_slots, frame_shape, previous_wrists):
+#     """Get the physical hand slot for the detected hand."""
+#     hand_landmarks = results.multi_hand_landmarks[detected_index]
+#     wrist = hand_landmarks.landmark[0]
+
+#     current_wrist = np.array([
+#         wrist.x * frame_shape[1],
+#         wrist.y * frame_shape[0]
+#     ], dtype=float)
+
+#     #MediaPipe Handedness
+#     preferred_slot = None
+#     handedness_score = 0.0
+
+#     if results.multi_handedness and detected_index < len(results.multi_handedness):
+#         classification = results.multi_handedness[detected_index].classification[0]
+#         mp_label = classification.label
+#         handedness_score = classification.score
+#         physical_label = get_physical_hand_label(mp_label)
+
+
+#         if physical_label in HAND_LABELS:
+#             preferred_slot = HAND_LABELS.index(physical_label)
+
+#             # if preferred_slot not in filled_slots:
+#             #     return preferred_slot
+
+#     # for slot in range(len(HAND_LABELS)):
+#     #     if slot not in filled_slots:
+#     #         return slot
+#     available_slots = [slot for slot in range(len(HAND_LABELS)) if slot not in filled_slots]
+#     if not available_slots:
+#         return None
+    
+#     if preferred_slot is not None and preferred_slot in available_slots:
+#         if handedness_score > 0.85:
+#             print("#MediaPipe#")
+#             return preferred_slot
+
+    
+#     #Temporal matching
+#     distances = {}
+
+#     for slot in available_slots:
+#         prev_wrist = previous_wrists[slot]
+
+#         if prev_wrist is not None:
+#             distances[slot] = np.linalg.norm(current_wrist - prev_wrist)
+
+#     if distances:
+#         nearest_slot = min(distances, key=distances.get)
+#         print("Temporal matching alert!!!!!!!!!!!!")
+#         return nearest_slot
+
+    
+#     #Fallback: if it dont have previous wrist
+#     if (preferred_slot is not None and preferred_slot not in filled_slots):
+#         print(">>>Fallback<<<")
+#         return preferred_slot
+    
+#     return available_slots[0]
+
+
+
+
+# def _get_hand_slot(results,frame_shape, previous_wrists):
+#     """Get the physical hand slot for the detected hand."""
+#     num_detections = len(
+#         results.multi_hand_landmarks
+#     )
+
+#     if num_detections == 0:
+#         return {}
+
+#     current_wrists = []
+#     preferred_slots = []
+#     scores = []
+
+#     # --------------------------------
+#     # Extract evidence
+#     # --------------------------------
+#     for detected_index, hand_landmarks in enumerate(
+#         results.multi_hand_landmarks
+#     ):
+#         wrist = hand_landmarks.landmark[0]
+
+#         current_wrists.append(
+#             np.array([
+#                 wrist.x * frame_shape[1],
+#                 wrist.y * frame_shape[0],
+#             ], dtype=float)
+#         )
+
+#         preferred_slot = None
+#         score = 0.0
+
+#         if (
+#             results.multi_handedness
+#             and detected_index
+#                 < len(results.multi_handedness)
+#         ):
+#             classification = (
+#                 results.multi_handedness[
+#                     detected_index
+#                 ].classification[0]
+#             )
+
+#             score = classification.score
+
+#             physical_label = (
+#                 get_physical_hand_label(
+#                     classification.label
+#                 )
+#             )
+
+#             if physical_label in HAND_LABELS:
+#                 preferred_slot = (
+#                     HAND_LABELS.index(
+#                         physical_label
+#                     )
+#                 )
+
+#         preferred_slots.append(
+#             preferred_slot
+#         )
+
+#         scores.append(
+#             score
+#         )
+
+#     # --------------------------------
+#     # One-hand case
+#     # --------------------------------
+#     if num_detections == 1:
+#         if preferred_slots[0] is not None:
+#             return {
+#                 0: preferred_slots[0]
+#             }
+
+#         distances = {}
+
+#         for slot in range(len(HAND_LABELS)):
+#             prev_wrist = previous_wrists[slot]
+
+#             if prev_wrist is not None:
+#                 distances[slot] = np.linalg.norm(
+#                     current_wrists[0]
+#                     - prev_wrist
+#                 )
+
+#         if distances:
+#             return {
+#                 0: min(
+#                     distances,
+#                     key=distances.get
+#                 )
+#             }
+
+#         return {0: 0}
+    
+#     # --------------------------------
+#     # Two-hand case
+#     # --------------------------------
+#     if num_detections == 2:
+
+#         # No full previous state
+#         if (
+#             previous_wrists[0] is None
+#             or previous_wrists[1] is None
+#         ):
+#             if (
+#                 preferred_slots[0] is not None
+#                 and preferred_slots[1] is not None
+#                 and preferred_slots[0]
+#                     != preferred_slots[1]
+#             ):
+#                 return {
+#                     0: preferred_slots[0],
+#                     1: preferred_slots[1],
+#                 }
+
+#             #fallback
+#             return {
+#                 0: 0,
+#                 1: 1,
+#             }
+
+#         for i, hand in enumerate(results.multi_hand_landmarks):
+#             wrist = hand.landmark[0]
+
+#             current_wrists.append(
+#                 np.array([
+#                     wrist.x * frame_shape[1],
+#                     wrist.y * frame_shape[0]
+#                 ], dtype=float)
+#             )
+
+#             classification = (
+#                 results.multi_handedness[i]
+#                 .classification[0]
+#             )
+
+#             physical_label = (
+#                 get_physical_hand_label(
+#                     classification.label
+#                 )
+#             )
+
+#             preferred_slots.append(
+#                 HAND_LABELS.index(
+#                     physical_label
+#                 )
+#             )
+
+#             scores.append(
+#                 classification.score
+#             )
+
+#         #if temporal history is missing. Use MediaPipe result
+#         if(previous_wrists[0] is None or previous_wrists[1] is None):
+#             return {
+#                 0: preferred_slots[0],
+#                 1: preferred_slots[1],
+#             }
+
+
+#         image_diag = np.hypot(
+#             frame_shape[0],
+#             frame_shape[1]
+#         )
+
+
+#         def temporal_cost(
+#             detection_idx,
+#             slot
+#         ):
+#             return (
+#                 np.linalg.norm(
+#                     current_wrists[detection_idx]
+#                     - previous_wrists[slot]
+#                 )
+#                 / image_diag
+#             )
+
+#         def hand_cost(
+#             detection_idx,
+#             slot
+#         ):
+#             score = scores[detection_idx]
+
+#             if slot == preferred_slots[detection_idx]:
+#                 prob = score
+#             else:
+#                 prob = 1.0 - score
+
+#             return -np.log(
+#                 max(prob, 1e-6)
+#             )
+
+#         WT = 1.0
+#         WH = 0.3
+
+#         #caseA: detection0 -> Left, detection1 -> Right
+#         cost_a = (
+#             WT * (
+#                 temporal_cost(0, 0) + temporal_cost(1, 1)
+#             ) 
+#             + 
+#             WH * (
+#                 hand_cost(0, 0) + hand_cost(1, 1)
+#             )
+#         )
+
+
+#         #caseB: detection0 -> Right, detection1 -> Left
+
+#         cost_b = (
+#             WT * (
+#                 temporal_cost(0, 1)
+#                 +
+#                 temporal_cost(1, 0)
+#             )
+#             +
+#             WH * (
+#                 hand_cost(0, 1)
+#                 +
+#                 hand_cost(1, 0)
+#             )
+#         )
+
+#         print(
+#             f"joint cost: "
+#             f"A={cost_a:.4f}, "
+#             f"B={cost_b:.4f}"
+#         )
+
+#         if cost_a <= cost_b:
+#             return {
+#                 0: 0,
+#                 1: 1
+#             }
+
+#         return {
+#             0: 1,
+#             1: 0
+#         }
+
+
+
+
+
+
+
+def _extract_frame_keypoints(results, frame, point_dim, previous_wrists):
     frame_keypoints = _empty_frame_keypoints(len(HAND_LABELS), point_dim)
 
     if not results.multi_hand_landmarks:
         return frame_keypoints
 
-    filled_slots = set()
+    assignments = _get_hand_slot(results, frame.shape, previous_wrists)
+
     for detected_index, hand_landmarks in enumerate(results.multi_hand_landmarks):
-        hand_slot = _get_hand_slot(results, detected_index, filled_slots)
-        if hand_slot is None:
+        
+
+        if detected_index not in assignments:
             continue
 
-        filled_slots.add(hand_slot)
+        hand_slot = assignments[detected_index]
+
         for p in range(NUM_HAND_KEYPOINTS):
             pxl_x = int(round(frame.shape[1] * hand_landmarks.landmark[p].x))
             pxl_y = int(round(frame.shape[0] * hand_landmarks.landmark[p].y))
             frame_keypoints[hand_slot][p] = [pxl_x, pxl_y]
+        
+    for hand_slot in range(len(HAND_LABELS)):
+        wrist_point = frame_keypoints[hand_slot][0]
 
+        if wrist_point[0] != -1:
+            previous_wrists[hand_slot] = np.array(
+                wrist_point,
+                dtype=float
+            )
     return frame_keypoints
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# def _extract_frame_keypoints(results, frame, point_dim, previous_wrists):
+#     frame_keypoints = _empty_frame_keypoints(len(HAND_LABELS), point_dim)
+
+#     if not results.multi_hand_landmarks:
+#         return frame_keypoints
+
+#     filled_slots = set()
+#     for detected_index, hand_landmarks in enumerate(results.multi_hand_landmarks):
+#         hand_slot = _get_hand_slot(results, detected_index, filled_slots, frame.shape, previous_wrists)
+
+#         if hand_slot is None:
+#             continue
+
+#         filled_slots.add(hand_slot)
+#         for p in range(NUM_HAND_KEYPOINTS):
+#             pxl_x = int(round(frame.shape[1] * hand_landmarks.landmark[p].x))
+#             pxl_y = int(round(frame.shape[0] * hand_landmarks.landmark[p].y))
+#             frame_keypoints[hand_slot][p] = [pxl_x, pxl_y]
+        
+#     previous_wrists[hand_slot] = np.array(
+#         frame_keypoints[hand_slot][0],
+#         dtype=float
+#     )
+
+#     return frame_keypoints
 
 
 def _unproject_hand_keypoints(hand_keypoints, camera_matrix, distortion, distortion_model):
@@ -152,7 +516,16 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     kpts_cam = []
     for i in range(len(hands)):
         kpts_cam.append([])
+    
     kpts_3d = []
+    
+    previous_wrists = {
+        cam_id: [
+            None,   # Left slot
+            None,   # Right slot
+        ]
+        for cam_id in range(len(input_streams))
+    }
 
     #3d kalman filter
     # hand_kalman_filters = [
@@ -193,10 +566,12 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         #frame0 kpts
         for i in range(len(input_streams)):
             if frame[i] is not None:
-                frame_keypoints = _extract_frame_keypoints(results[i], frame[i], point_dim=2)
+                frame_keypoints = _extract_frame_keypoints(results[i], frame[i], point_dim=2, previous_wrists=previous_wrists[i])
                 kpts_cam[i].append(frame_keypoints)
+
             else:
                 kpts_cam[i].append(_empty_frame_keypoints(len(HAND_LABELS), point_dim=2))
+
 
         #calculate 3d position
         frame_p3ds = []
@@ -227,61 +602,100 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         frame_p3ds = np.array(frame_p3ds).reshape((len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3))
         kpts_3d.append(frame_p3ds)
 
+
+
+
+
         # Draw the hand annotations on the image.
         frame[cam_ids[0]].flags.writeable = True
         frame[cam_ids[1]].flags.writeable = True
         frame[cam_ids[0]] = cv.cvtColor(frame[cam_ids[0]], cv.COLOR_RGB2BGR)
         frame[cam_ids[1]] = cv.cvtColor(frame[cam_ids[1]], cv.COLOR_RGB2BGR)
 
-        if results[cam_ids[0]].multi_hand_landmarks:
-            for i, hand_landmarks in enumerate(results[cam_ids[0]].multi_hand_landmarks):
-                # if i == 0:
-                #     mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
-                # else:
-                #     mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+        # if results[cam_ids[0]].multi_hand_landmarks:
+        #     for i, hand_landmarks in enumerate(results[cam_ids[0]].multi_hand_landmarks):
 
-                handedness = results[cam_ids[0]].multi_handedness[i]
-                classification = handedness.classification[0]
+        #         handedness = results[cam_ids[0]].multi_handedness[i]
+        #         classification = handedness.classification[0]
 
-                mp_label = classification.label
-                score = classification.score
+        #         mp_label = classification.label
+        #         score = classification.score
 
-                physical_label = get_physical_hand_label(mp_label)
+        #         physical_label = get_physical_hand_label(mp_label)
 
-                if physical_label == "Right":
-                    color = RED
-                elif physical_label == "Left":
-                    color = BLUE
+        #         if physical_label == "Right":
+        #             color = RED
+        #         elif physical_label == "Left":
+        #             color = BLUE
 
-                mp_drawing.draw_landmarks(
-                    frame[cam_ids[0]],
-                    hand_landmarks,
-                    mp_hands.HAND_CONNECTIONS,
-                    mp_drawing.DrawingSpec(color=color),
+        #         mp_drawing.draw_landmarks(
+        #             frame[cam_ids[0]],
+        #             hand_landmarks,
+        #             mp_hands.HAND_CONNECTIONS,
+        #             mp_drawing.DrawingSpec(color=color),
+        #         )
+
+        # for hand_idx, hand_keypoints in enumerate(frame_keypoints):
+        #     if hand_idx == 0:
+        #         color = BLUE
+        #     else:
+        #         color = RED
+
+
+        # if results[cam_ids[1]].multi_hand_landmarks:
+        #     for i, hand_landmarks in enumerate(results[cam_ids[1]].multi_hand_landmarks):
+
+        #         handedness = results[cam_ids[1]].multi_handedness[i]
+        #         classification = handedness.classification[0]
+
+        #         mp_label = classification.label
+        #         score = classification.score
+        #         physical_label = get_physical_hand_label(mp_label)
+
+        #         if physical_label == "Right":
+        #             color = RED
+        #         elif physical_label == "Left":
+        #             color = BLUE
+
+        #         mp_drawing.draw_landmarks(
+        #             frame[cam_ids[1]],
+        #             hand_landmarks,
+        #             mp_hands.HAND_CONNECTIONS,
+        #             mp_drawing.DrawingSpec(color=color),
+                # )
+        for cam_id in cam_ids:
+
+            current_handpoints = kpts_cam[cam_id][-1]
+
+            for hand_idx, hand_keypoints in enumerate(
+                current_handpoints
+            ):
+                hand_keypoints = np.asarray(
+                    hand_keypoints,
+                    dtype=float
                 )
 
+                # 当前 hand 没有检测到
+                if np.all(hand_keypoints[:, 0] == -1):
+                    continue
 
-        if results[cam_ids[1]].multi_hand_landmarks:
-            for i, hand_landmarks in enumerate(results[cam_ids[1]].multi_hand_landmarks):
-                # if i == 0:
-                #     mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
-                # else:
-                #     mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+                # hand_idx 已经是 _get_hand_slot() 整理后的 slot
+                label = HAND_LABELS[hand_idx]
 
-                handedness = results[cam_ids[1]].multi_handedness[i]
-                classification = handedness.classification[0]
-
-                mp_label = classification.label
-                score = classification.score
-                physical_label = get_physical_hand_label(mp_label)
-
-                if physical_label == "Right":
-                    color = RED
-                elif physical_label == "Left":
+                if label == "Left":
                     color = BLUE
+                elif label == "Right":
+                    color = RED
+                else:
+                    continue
+
+                hand_landmarks = hand_points_to_mp_landmarks(
+                    hand_keypoints,
+                    frame[cam_id].shape
+                )
 
                 mp_drawing.draw_landmarks(
-                    frame[cam_ids[1]],
+                    frame[cam_id],
                     hand_landmarks,
                     mp_hands.HAND_CONNECTIONS,
                     mp_drawing.DrawingSpec(color=color),
@@ -304,6 +718,11 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         cap.release()
 
     return np.array(kpts_cam), np.array(kpts_3d)
+
+
+
+
+
 
 def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestamps=None, visualize=False):
     input_streams = streams
