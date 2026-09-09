@@ -21,6 +21,7 @@ from pathlib import Path
 from show_hands import hand_points_to_mp_landmarks
 from mediapipe.framework.formats import landmark_pb2
 from tools.detect_hand import _get_hand_slot
+from tools.oneEuroFilter import Hand2DOneEuro
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -527,6 +528,12 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         for cam_id in range(len(input_streams))
     }
 
+    #2d one euro filter
+    hand_smoothers = [
+        Hand2DOneEuro(freq=30.0)
+        for _ in input_streams
+    ]
+
     #3d kalman filter
     # hand_kalman_filters = [
     # Hand3DKalmanFilter(num_points=NUM_HAND_KEYPOINTS)
@@ -563,15 +570,26 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
                 results.append(results[-1] if results else None)
 
         #prepare list of hand keypoints of this frame
+        display_keypoints = []
+
+        timestamps = frame_idx / 30.0
+        
         #frame0 kpts
         for i in range(len(input_streams)):
             if frame[i] is not None:
                 frame_keypoints = _extract_frame_keypoints(results[i], frame[i], point_dim=2, previous_wrists=previous_wrists[i])
-                kpts_cam[i].append(frame_keypoints)
 
             else:
-                kpts_cam[i].append(_empty_frame_keypoints(len(HAND_LABELS), point_dim=2))
+                frame_keypoints = _empty_frame_keypoints(len(HAND_LABELS), point_dim=2)
 
+            kpts_cam[i].append(frame_keypoints)
+
+            #apply one euro filter
+            smoothed = hand_smoothers[i].update(
+                frame_keypoints,
+                timestamps,
+            )
+            display_keypoints.append(smoothed)
 
         #calculate 3d position
         frame_p3ds = []
@@ -665,7 +683,8 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
                 # )
         for cam_id in cam_ids:
 
-            current_handpoints = kpts_cam[cam_id][-1]
+            # current_handpoints = kpts_cam[cam_id][-1]
+            current_handpoints = display_keypoints[cam_id]
 
             for hand_idx, hand_keypoints in enumerate(
                 current_handpoints

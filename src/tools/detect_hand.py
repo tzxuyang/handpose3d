@@ -100,12 +100,12 @@ def _get_hand_slot(results,frame_shape, previous_wrists):
                     / image_diag
                 )
 
-        # 这些只是初始值，后续要根据日志调参
+        # Initial parameter
         MAX_STEP = 0.08
         MIN_MARGIN = 0.02
         TRUST_SCORE = 0.90
 
-        # Left、Right 都有历史位置
+        # Left、Right hand have distances
         if len(distances) == 2:
             ordered_slots = sorted(
                 distances,
@@ -130,15 +130,13 @@ def _get_hand_slot(results,frame_shape, previous_wrists):
                 or preferred_slot == nearest_slot
             )
 
-            # 空间关系明确，并且 label 没有强烈冲突
             if spatial_clear:
                 if label_agrees or handedness_score < TRUST_SCORE:
                     return {0: nearest_slot}
 
-            # 重叠或两种证据冲突：暂时不分配
+
             return {}
 
-        # 只有一个 slot 有历史
         if len(distances) == 1:
             known_slot = next(iter(distances))
 
@@ -151,17 +149,16 @@ def _get_hand_slot(results,frame_shape, previous_wrists):
                 if label_agrees or handedness_score < TRUST_SCORE:
                     return {0: known_slot}
 
-                # 位置与高置信度 label 冲突
                 return {}
 
-        # 没有可靠历史时，才采用高置信度 handedness
+
         if (
             preferred_slot is not None
             and handedness_score >= TRUST_SCORE
         ):
             return {0: preferred_slot}
 
-        # 不确定时留空，避免写错 slot
+
         return {}
     
     # --------------------------------
@@ -278,7 +275,6 @@ def _get_hand_slot(results,frame_shape, previous_wrists):
 
 
         #caseB: detection0 -> Right, detection1 -> Left
-
         cost_b = (
             WT * (
                 temporal_cost(0, 1) + temporal_cost(1, 0)
@@ -306,4 +302,4 @@ def _get_hand_slot(results,frame_shape, previous_wrists):
         }
     
     return {}
-    
+
