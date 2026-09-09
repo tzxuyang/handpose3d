@@ -103,7 +103,7 @@ def _get_hand_slot(results,frame_shape, previous_wrists):
         # Initial parameter
         MAX_STEP = 0.08
         MIN_MARGIN = 0.02
-        TRUST_SCORE = 0.90
+        TRUST_SCORE = 0.95
 
         # Left、Right hand have distances
         if len(distances) == 2:
@@ -165,141 +165,147 @@ def _get_hand_slot(results,frame_shape, previous_wrists):
     # Two-hand case
     # --------------------------------
     if num_detections == 2:
+        MAX_STEP = 0.08
+        LABEL_WEIGHT = 0.10
+        MIN_MOTION_MARGIN = 0.05
+        MIN_COST_MARGIN = 0.05
+        INIT_SCORE = 0.95
+        INIT_MIN_SEPARATION = 0.02
 
-        # No full previous state
-        if (
-            previous_wrists[0] is None
-            or previous_wrists[1] is None
-        ):
-            if (
-                preferred_slots[0] is not None
-                and preferred_slots[1] is not None
-                and preferred_slots[0] != preferred_slots[1]
-            ):
-                return {
-                    0: preferred_slots[0],
-                    1: preferred_slots[1],
-                }
+        image_diag = max(float(np.hypot(*frame_shape[:2])), 1.0)
+        wrists = np.asarray(current_wrists, dtype=float)
 
-            #fallback
-            return {
-                0: 0,
-                1: 1,
-            }
+        if not np.isfinite(wrists).all():
+            return {}
 
-        for i, hand in enumerate(results.multi_hand_landmarks):
-            wrist = hand.landmark[0]
+        known_slots = [
+            slot for slot in range(2)
+            if previous_wrists[slot] is not None
+        ]
 
-            current_wrists.append(
-                np.array([
-                    wrist.x * frame_shape[1],
-                    wrist.y * frame_shape[0]
-                ], dtype=float)
-            )
+        # 行：detection；列：Left / Right slot。
+        distances = np.full((2, 2), np.inf)
 
-            classification = (
-                results.multi_handedness[i]
-                .classification[0]
-            )
-
-            physical_label = (
-                get_physical_hand_label(
-                    classification.label
-                )
-            )
-
-            preferred_slots.append(
-                HAND_LABELS.index(
-                    physical_label
-                )
-            )
-
-            scores.append(
-                classification.score
-            )
-
-        #if temporal history is missing. Use MediaPipe result
-        if(previous_wrists[0] is None or previous_wrists[1] is None):
-            return {
-                0: preferred_slots[0],
-                1: preferred_slots[1],
-            }
-
-
-        image_diag = np.hypot(
-            frame_shape[0],
-            frame_shape[1]
-        )
-
-
-        def temporal_cost(
-            detection_idx,
-            slot
-        ):
-            return (
+        for slot in known_slots:
+            distances[:, slot] = (
                 np.linalg.norm(
-                    current_wrists[detection_idx]
-                    - previous_wrists[slot]
+                    wrists - previous_wrists[slot],
+                    axis=1,
                 )
                 / image_diag
             )
 
-        def hand_cost(
-            detection_idx,
-            slot
-        ):
-            score = scores[detection_idx]
-
-            if slot == preferred_slots[detection_idx]:
-                prob = score
-            else:
-                prob = 1.0 - score
-
-            return -np.log(
-                max(prob, 1e-6)
+        # 历史不完整：需要较明确的标签来初始化。
+        # 不再使用 detection 0 -> Left 的兜底。
+        if len(known_slots) < 2:
+            labels_clear = (
+                all(slot is not None for slot in preferred_slots)
+                and preferred_slots[0] != preferred_slots[1]
+                and all(
+                    np.isfinite(s) and s >= INIT_SCORE
+                    for s in scores
+                )
             )
 
-        WT = 1.0
-        WH = 0.3
-
-        #caseA: detection0 -> Left, detection1 -> Right
-        cost_a = (
-            WT * (
-                temporal_cost(0, 0) + temporal_cost(1, 1)
-            ) 
-            + 
-            WH * (
-                hand_cost(0, 0) + hand_cost(1, 1)
+            separation = (
+                np.linalg.norm(wrists[0] - wrists[1]) / image_diag
             )
-        )
 
+            if not labels_clear or separation < INIT_MIN_SEPARATION:
+                return {}
 
-        #caseB: detection0 -> Right, detection1 -> Left
-        cost_b = (
-            WT * (
-                temporal_cost(0, 1) + temporal_cost(1, 0)
-            )
-            +
-            WH * (hand_cost(0, 1) + hand_cost(1, 0)
-            )
-        )
-
-        print(
-            f"joint cost: "
-            f"A={cost_a:.4f}, "
-            f"B={cost_b:.4f}"
-        )
-
-        if cost_a <= cost_b:
-            return {
-                0: 0,
-                1: 1
+            assignment = {
+                0: preferred_slots[0],
+                1: preferred_slots[1],
             }
 
-        return {
-            0: 1,
-            1: 0
-        }
-    
-    return {}
+            # 如果还有一只手的有效历史，初始化不能忽略它。
+            for det, slot in assignment.items():
+                if slot not in known_slots:
+                    continue
 
+                matched = distances[det, slot]
+                other = distances[1 - det, slot]
+
+                if matched > MAX_STEP:
+                    return {}
+
+                if (other - matched) / MAX_STEP < MIN_MOTION_MARGIN:
+                    return {}
+
+            return assignment
+
+        # A：detection 0 -> Left，detection 1 -> Right。
+        # B：detection 0 -> Right，detection 1 -> Left。
+        permutations = ((0, 1), (1, 0))
+
+        motion_costs = np.full(2, np.inf)
+        total_costs = np.full(2, np.inf)
+
+        for idx, slots in enumerate(permutations):
+            steps = np.array([
+                distances[det, slot]
+                for det, slot in enumerate(slots)
+            ])
+
+            # 任一匹配移动过远，整个排列不可用。
+            if np.any(steps > MAX_STEP):
+                continue
+
+            # 可接受匹配的位置代价归一化到 [0, 1]。
+            motion_costs[idx] = np.mean(steps / MAX_STEP)
+
+            label_penalties = []
+
+            for det, slot in enumerate(slots):
+                if (
+                    preferred_slots[det] is None
+                    or not np.isfinite(scores[det])
+                ):
+                    probability = 0.5
+                else:
+                    score = float(np.clip(scores[det], 0.5, 1.0))
+                    probability = (
+                        score
+                        if slot == preferred_slots[det]
+                        else 1.0 - score
+                    )
+
+                # 有界代价，避免 -log(prob) 在小概率时放大。
+                label_penalties.append(1.0 - probability)
+
+            total_costs[idx] = (
+                motion_costs[idx]
+                + LABEL_WEIGHT * np.mean(label_penalties)
+            )
+
+        feasible = np.isfinite(total_costs)
+
+        if not feasible.any():
+            return {}
+
+        best = int(np.argmin(total_costs))
+
+        if feasible.all():
+            # 位置本身无法明确区分两个排列。
+            if (
+                abs(motion_costs[0] - motion_costs[1])
+                < MIN_MOTION_MARGIN
+            ):
+                return {}
+
+            # 综合证据不足以明确区分两个排列。
+            if (
+                abs(total_costs[0] - total_costs[1])
+                < MIN_COST_MARGIN
+            ):
+                return {}
+
+            # 标签把选择推向与位置证据相反的排列时，先拒绝。
+            if best != int(np.argmin(motion_costs)):
+                return {}
+
+        return {
+            det: slot
+            for det, slot in enumerate(permutations[best])
+        }

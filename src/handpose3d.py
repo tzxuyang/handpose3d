@@ -17,7 +17,7 @@ from utils import (
 )
 from pymcap import PyMCAP
 from pathlib import Path
-# from tools.kalman_filter_3d import Hand3DKalmanFilter
+from tools.kalman_filter_3d import Hand3DKalmanFilter
 from show_hands import hand_points_to_mp_landmarks
 from mediapipe.framework.formats import landmark_pb2
 from tools.detect_hand import _get_hand_slot
@@ -383,14 +383,14 @@ def _extract_frame_keypoints(results, frame, point_dim, previous_wrists):
             pxl_y = int(round(frame.shape[0] * hand_landmarks.landmark[p].y))
             frame_keypoints[hand_slot][p] = [pxl_x, pxl_y]
         
-    for hand_slot in range(len(HAND_LABELS)):
-        wrist_point = frame_keypoints[hand_slot][0]
+    # for hand_slot in range(len(HAND_LABELS)):
+    #     wrist_point = frame_keypoints[hand_slot][0]
 
-        if wrist_point[0] != -1:
-            previous_wrists[hand_slot] = np.array(
-                wrist_point,
-                dtype=float
-            )
+    #     if wrist_point[0] != -1:
+    #         previous_wrists[hand_slot] = np.array(
+    #             wrist_point,
+    #             dtype=float
+    #         )
     return frame_keypoints
 
 
@@ -492,7 +492,7 @@ def _filter_hand_points_3d(hand_points_3d):
 
     return filtered_points
 
-def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
+def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False,timestamps=None):
     #read camera parameters
     cmtx0, dist0, distortion_model0 = read_camera_parameters(0)
     cmtx1, dist1, distortion_model1 = read_camera_parameters(1)
@@ -520,6 +520,12 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     
     kpts_3d = []
     
+    # containers for previous wrist positions for temporal matching
+    max_wrist_age_frames = 10
+    previous_wrist_frames = {
+        cam_id: [None, None]
+        for cam_id in range(len(input_streams))
+    }
     previous_wrists = {
         cam_id: [
             None,   # Left slot
@@ -535,10 +541,29 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     ]
 
     #3d kalman filter
-    # hand_kalman_filters = [
-    # Hand3DKalmanFilter(num_points=NUM_HAND_KEYPOINTS)
-    # for _ in range(len(HAND_LABELS))
-    # ]
+    # Initialize Kalman filters for right and left hands
+    right_hand_kalman = Hand3DKalmanFilter(
+        num_points=NUM_HAND_KEYPOINTS,
+    )
+
+    left_hand_kalman = Hand3DKalmanFilter(
+        num_points=NUM_HAND_KEYPOINTS,
+    )
+
+
+
+    #3d point missing frame cache
+    max_missing_3d_frames = 10
+    last_valid_3d = np.full(
+        (len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3),
+        -1.0,
+        dtype=float,
+    )
+
+    missing_3d = np.zeros(
+        (len(HAND_LABELS), NUM_HAND_KEYPOINTS),
+        dtype=int,
+    )
 
     frame_idx = 0
     while True:
@@ -571,30 +596,72 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
 
         #prepare list of hand keypoints of this frame
         display_keypoints = []
+        measured_keypoints = []
 
-        timestamps = frame_idx / 30.0
+        frame_timestamps = frame_idx / 30.0
         
         #frame0 kpts
-        for i in range(len(input_streams)):
-            if frame[i] is not None:
-                frame_keypoints = _extract_frame_keypoints(results[i], frame[i], point_dim=2, previous_wrists=previous_wrists[i])
+        # for i in range(len(input_streams)):
+        #     if frame[i] is not None:
+        #         frame_keypoints = _extract_frame_keypoints(results[i], frame[i], point_dim=2, previous_wrists=previous_wrists[i])
 
+        #     else:
+        #         frame_keypoints = _empty_frame_keypoints(len(HAND_LABELS), point_dim=2)
+
+        #     kpts_cam[i].append(frame_keypoints)
+        for i in range(len(input_streams)):
+            # before processing the current frame, check if any previous wrist positions have expired
+            for slot in range(len(HAND_LABELS)):
+                last_seen = previous_wrist_frames[i][slot]
+
+                if (
+                    last_seen is None
+                    or frame_idx - last_seen > max_wrist_age_frames
+                ):
+                    previous_wrists[i][slot] = None
+                    previous_wrist_frames[i][slot] = None
+
+            if frame[i] is not None and results[i] is not None:
+                frame_keypoints = _extract_frame_keypoints(
+                    results[i],
+                    frame[i],
+                    point_dim=2,
+                    previous_wrists=previous_wrists[i],
+                )
             else:
-                frame_keypoints = _empty_frame_keypoints(len(HAND_LABELS), point_dim=2)
+                frame_keypoints = _empty_frame_keypoints(
+                    len(HAND_LABELS),
+                    point_dim=2,
+                )
+
+            for slot in range(len(HAND_LABELS)):
+                wrist = np.asarray(frame_keypoints[slot][0], dtype=float)
+
+                if np.isfinite(wrist).all() and np.all(wrist != -1):
+                    previous_wrists[i][slot] = wrist.copy()
+                    previous_wrist_frames[i][slot] = frame_idx
 
             kpts_cam[i].append(frame_keypoints)
 
             #apply one euro filter
-            smoothed = hand_smoothers[i].update(
+            measured_points, display_points = hand_smoothers[i].update(
                 frame_keypoints,
-                timestamps,
+                frame_timestamps,
             )
-            display_keypoints.append(smoothed)
+            display_keypoints.append(display_points)
+            measured_keypoints.append(measured_points)
+        
+
+        print('display keypoints: ', display_keypoints[cam_ids[0]], display_keypoints[cam_ids[1]])
+        print("displaypoint type", np.asarray(display_keypoints).shape)
+        print("kpts type : ", np.asarray(kpts_cam).shape)
+
 
         #calculate 3d position
         frame_p3ds = []
         
-        for hand0_keypoints, hand1_keypoints in zip(kpts_cam[cam_ids[0]][-1], kpts_cam[cam_ids[1]][-1]):
+        # for hand0_keypoints, hand1_keypoints in zip(kpts_cam[cam_ids[0]][-1], kpts_cam[cam_ids[1]][-1]):
+        for hand0_keypoints, hand1_keypoints in zip(measured_keypoints[cam_ids[0]], measured_keypoints[cam_ids[1]]):
             hand0_rays = _unproject_hand_keypoints(hand0_keypoints, cmtx0, dist0, distortion_model0)
             hand1_rays = _unproject_hand_keypoints(hand1_keypoints, cmtx1, dist1, distortion_model1)
 
@@ -617,8 +684,45 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         This contains the 3d position of each keypoint in current frame.
         For real time application, this is what you want.
         '''
-        frame_p3ds = np.array(frame_p3ds).reshape((len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3))
-        kpts_3d.append(frame_p3ds)
+        # frame_p3ds = np.array(frame_p3ds).reshape((len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3))
+        measured_p3ds = np.asarray(frame_p3ds, dtype=float).reshape(
+            len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3
+        )
+
+        dt = 1.0 / 30.0
+        if timestamps is not None and 0 < frame_idx < len(timestamps):
+            timestamp_delta_ns = (
+                int(timestamps[frame_idx])
+                - int(timestamps[frame_idx - 1])
+            )
+            measured_dt = timestamp_delta_ns * 1e-9
+
+            if 0.0 < measured_dt <= 0.1:
+                dt = measured_dt
+
+
+        measured_p3ds[0] = left_hand_kalman.update(measured_p3ds[0], dt)
+        measured_p3ds[1] = right_hand_kalman.update(measured_p3ds[1], dt)
+
+
+
+        observed_3d = (
+            np.isfinite(measured_p3ds).all(axis=-1)
+            & ~np.all(measured_p3ds == -1.0, axis=-1)
+        )
+
+        #update missing frame count and last valid 3d point cache
+        missing_3d[observed_3d] = 0
+        missing_3d[~observed_3d] += 1
+
+        last_valid_3d[observed_3d] = measured_p3ds[observed_3d]
+
+        expired = missing_3d > max_missing_3d_frames
+        last_valid_3d[expired] = -1.0
+
+        display_p3ds = last_valid_3d.copy()
+
+        kpts_3d.append(display_p3ds)
 
 
 
@@ -746,7 +850,7 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
 def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestamps=None, visualize=False):
     input_streams = streams
 
-    kpts_cam, kpts_3d = run_mp(input_streams, None, None, cam_3d_ids, visualize)
+    kpts_cam, kpts_3d = run_mp(input_streams, None, None, cam_3d_ids, visualize, timestamps)
     
     kpts_cam = np.array(kpts_cam)
 
