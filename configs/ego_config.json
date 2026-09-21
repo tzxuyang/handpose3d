@@ -12,6 +12,18 @@
         "/robot0/sensor/camera4/camera_info"
     ],
     "imu_topic": "/robot0/sensor/imu",
+    "vio": {
+        "enabled": true,
+        "basalt_bin": "./.deps/basalt/0.1.7/bin/basalt_vio",
+        "cam0": 1,
+        "cam1": 4,
+        "scale": 0.5,
+        "anchor": "position",
+        "yaw_deg": 89.8,
+        "output_dir": "./basalt",
+        "keep_frames": false,
+        "reuse_trajectory": true
+    },
     "handpoints_2d_topic": [
         "/robot0/sensor/camera0/pre/hand_keypoints2d",
         "/robot0/sensor/camera1/pre/hand_keypoints2d",

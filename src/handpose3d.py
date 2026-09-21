@@ -22,6 +22,9 @@ from show_hands import hand_points_to_mp_landmarks
 from mediapipe.framework.formats import landmark_pb2
 from tools.detect_hand import _get_hand_slot
 from tools.oneEuroFilter import Hand2DOneEuro
+from vio.pipeline import PoseTask
+from vio.qc import update_qc_json, world_stability_qc
+from vio.trajectory import PoseTrajectory
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -43,323 +46,6 @@ def get_physical_hand_label(mp_label):
     elif mp_label == "Left":
         return "Right"
     return mp_label
-
-
-
-
-
-
-# def _get_hand_slot(results, detected_index, filled_slots, frame_shape, previous_wrists):
-#     """Get the physical hand slot for the detected hand."""
-#     hand_landmarks = results.multi_hand_landmarks[detected_index]
-#     wrist = hand_landmarks.landmark[0]
-
-#     current_wrist = np.array([
-#         wrist.x * frame_shape[1],
-#         wrist.y * frame_shape[0]
-#     ], dtype=float)
-
-#     #MediaPipe Handedness
-#     preferred_slot = None
-#     handedness_score = 0.0
-
-#     if results.multi_handedness and detected_index < len(results.multi_handedness):
-#         classification = results.multi_handedness[detected_index].classification[0]
-#         mp_label = classification.label
-#         handedness_score = classification.score
-#         physical_label = get_physical_hand_label(mp_label)
-
-
-#         if physical_label in HAND_LABELS:
-#             preferred_slot = HAND_LABELS.index(physical_label)
-
-#             # if preferred_slot not in filled_slots:
-#             #     return preferred_slot
-
-#     # for slot in range(len(HAND_LABELS)):
-#     #     if slot not in filled_slots:
-#     #         return slot
-#     available_slots = [slot for slot in range(len(HAND_LABELS)) if slot not in filled_slots]
-#     if not available_slots:
-#         return None
-    
-#     if preferred_slot is not None and preferred_slot in available_slots:
-#         if handedness_score > 0.85:
-#             print("#MediaPipe#")
-#             return preferred_slot
-
-    
-#     #Temporal matching
-#     distances = {}
-
-#     for slot in available_slots:
-#         prev_wrist = previous_wrists[slot]
-
-#         if prev_wrist is not None:
-#             distances[slot] = np.linalg.norm(current_wrist - prev_wrist)
-
-#     if distances:
-#         nearest_slot = min(distances, key=distances.get)
-#         print("Temporal matching alert!!!!!!!!!!!!")
-#         return nearest_slot
-
-    
-#     #Fallback: if it dont have previous wrist
-#     if (preferred_slot is not None and preferred_slot not in filled_slots):
-#         print(">>>Fallback<<<")
-#         return preferred_slot
-    
-#     return available_slots[0]
-
-
-
-
-# def _get_hand_slot(results,frame_shape, previous_wrists):
-#     """Get the physical hand slot for the detected hand."""
-#     num_detections = len(
-#         results.multi_hand_landmarks
-#     )
-
-#     if num_detections == 0:
-#         return {}
-
-#     current_wrists = []
-#     preferred_slots = []
-#     scores = []
-
-#     # --------------------------------
-#     # Extract evidence
-#     # --------------------------------
-#     for detected_index, hand_landmarks in enumerate(
-#         results.multi_hand_landmarks
-#     ):
-#         wrist = hand_landmarks.landmark[0]
-
-#         current_wrists.append(
-#             np.array([
-#                 wrist.x * frame_shape[1],
-#                 wrist.y * frame_shape[0],
-#             ], dtype=float)
-#         )
-
-#         preferred_slot = None
-#         score = 0.0
-
-#         if (
-#             results.multi_handedness
-#             and detected_index
-#                 < len(results.multi_handedness)
-#         ):
-#             classification = (
-#                 results.multi_handedness[
-#                     detected_index
-#                 ].classification[0]
-#             )
-
-#             score = classification.score
-
-#             physical_label = (
-#                 get_physical_hand_label(
-#                     classification.label
-#                 )
-#             )
-
-#             if physical_label in HAND_LABELS:
-#                 preferred_slot = (
-#                     HAND_LABELS.index(
-#                         physical_label
-#                     )
-#                 )
-
-#         preferred_slots.append(
-#             preferred_slot
-#         )
-
-#         scores.append(
-#             score
-#         )
-
-#     # --------------------------------
-#     # One-hand case
-#     # --------------------------------
-#     if num_detections == 1:
-#         if preferred_slots[0] is not None:
-#             return {
-#                 0: preferred_slots[0]
-#             }
-
-#         distances = {}
-
-#         for slot in range(len(HAND_LABELS)):
-#             prev_wrist = previous_wrists[slot]
-
-#             if prev_wrist is not None:
-#                 distances[slot] = np.linalg.norm(
-#                     current_wrists[0]
-#                     - prev_wrist
-#                 )
-
-#         if distances:
-#             return {
-#                 0: min(
-#                     distances,
-#                     key=distances.get
-#                 )
-#             }
-
-#         return {0: 0}
-    
-#     # --------------------------------
-#     # Two-hand case
-#     # --------------------------------
-#     if num_detections == 2:
-
-#         # No full previous state
-#         if (
-#             previous_wrists[0] is None
-#             or previous_wrists[1] is None
-#         ):
-#             if (
-#                 preferred_slots[0] is not None
-#                 and preferred_slots[1] is not None
-#                 and preferred_slots[0]
-#                     != preferred_slots[1]
-#             ):
-#                 return {
-#                     0: preferred_slots[0],
-#                     1: preferred_slots[1],
-#                 }
-
-#             #fallback
-#             return {
-#                 0: 0,
-#                 1: 1,
-#             }
-
-#         for i, hand in enumerate(results.multi_hand_landmarks):
-#             wrist = hand.landmark[0]
-
-#             current_wrists.append(
-#                 np.array([
-#                     wrist.x * frame_shape[1],
-#                     wrist.y * frame_shape[0]
-#                 ], dtype=float)
-#             )
-
-#             classification = (
-#                 results.multi_handedness[i]
-#                 .classification[0]
-#             )
-
-#             physical_label = (
-#                 get_physical_hand_label(
-#                     classification.label
-#                 )
-#             )
-
-#             preferred_slots.append(
-#                 HAND_LABELS.index(
-#                     physical_label
-#                 )
-#             )
-
-#             scores.append(
-#                 classification.score
-#             )
-
-#         #if temporal history is missing. Use MediaPipe result
-#         if(previous_wrists[0] is None or previous_wrists[1] is None):
-#             return {
-#                 0: preferred_slots[0],
-#                 1: preferred_slots[1],
-#             }
-
-
-#         image_diag = np.hypot(
-#             frame_shape[0],
-#             frame_shape[1]
-#         )
-
-
-#         def temporal_cost(
-#             detection_idx,
-#             slot
-#         ):
-#             return (
-#                 np.linalg.norm(
-#                     current_wrists[detection_idx]
-#                     - previous_wrists[slot]
-#                 )
-#                 / image_diag
-#             )
-
-#         def hand_cost(
-#             detection_idx,
-#             slot
-#         ):
-#             score = scores[detection_idx]
-
-#             if slot == preferred_slots[detection_idx]:
-#                 prob = score
-#             else:
-#                 prob = 1.0 - score
-
-#             return -np.log(
-#                 max(prob, 1e-6)
-#             )
-
-#         WT = 1.0
-#         WH = 0.3
-
-#         #caseA: detection0 -> Left, detection1 -> Right
-#         cost_a = (
-#             WT * (
-#                 temporal_cost(0, 0) + temporal_cost(1, 1)
-#             ) 
-#             + 
-#             WH * (
-#                 hand_cost(0, 0) + hand_cost(1, 1)
-#             )
-#         )
-
-
-#         #caseB: detection0 -> Right, detection1 -> Left
-
-#         cost_b = (
-#             WT * (
-#                 temporal_cost(0, 1)
-#                 +
-#                 temporal_cost(1, 0)
-#             )
-#             +
-#             WH * (
-#                 hand_cost(0, 1)
-#                 +
-#                 hand_cost(1, 0)
-#             )
-#         )
-
-#         print(
-#             f"joint cost: "
-#             f"A={cost_a:.4f}, "
-#             f"B={cost_b:.4f}"
-#         )
-
-#         if cost_a <= cost_b:
-#             return {
-#                 0: 0,
-#                 1: 1
-#             }
-
-#         return {
-#             0: 1,
-#             1: 0
-#         }
-
-
-
-
-
 
 
 def _extract_frame_keypoints(results, frame, point_dim, previous_wrists):
@@ -392,57 +78,6 @@ def _extract_frame_keypoints(results, frame, point_dim, previous_wrists):
     #             dtype=float
     #         )
     return frame_keypoints
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# def _extract_frame_keypoints(results, frame, point_dim, previous_wrists):
-#     frame_keypoints = _empty_frame_keypoints(len(HAND_LABELS), point_dim)
-
-#     if not results.multi_hand_landmarks:
-#         return frame_keypoints
-
-#     filled_slots = set()
-#     for detected_index, hand_landmarks in enumerate(results.multi_hand_landmarks):
-#         hand_slot = _get_hand_slot(results, detected_index, filled_slots, frame.shape, previous_wrists)
-
-#         if hand_slot is None:
-#             continue
-
-#         filled_slots.add(hand_slot)
-#         for p in range(NUM_HAND_KEYPOINTS):
-#             pxl_x = int(round(frame.shape[1] * hand_landmarks.landmark[p].x))
-#             pxl_y = int(round(frame.shape[0] * hand_landmarks.landmark[p].y))
-#             frame_keypoints[hand_slot][p] = [pxl_x, pxl_y]
-        
-#     previous_wrists[hand_slot] = np.array(
-#         frame_keypoints[hand_slot][0],
-#         dtype=float
-#     )
-
-#     return frame_keypoints
 
 
 def _unproject_hand_keypoints(hand_keypoints, camera_matrix, distortion, distortion_model):
@@ -491,6 +126,53 @@ def _filter_hand_points_3d(hand_points_3d):
             filtered_points[point_idx] = [-1, -1, -1]
 
     return filtered_points
+
+
+def _resolve_trajectory(
+    pose_task: PoseTask | None,
+    pose_trajectory: PoseTrajectory | None,
+) -> tuple[PoseTrajectory | None, str]:
+    """Return the trajectory to fuse with, plus a status string for QC."""
+    if pose_trajectory is not None:
+        return pose_trajectory, "provided"
+    if pose_task is None:
+        return None, "not requested"
+    result = pose_task.get()
+    status = f"{result.status}: {result.message}"
+    if result.ok:
+        return result.trajectory, status
+    print(f"[vio] world-frame output skipped ({status})")
+    return None, status
+
+
+def _write_world_outputs(
+    head_points,
+    frame_timestamps,
+    trajectory: PoseTrajectory,
+    hand_2d_paths,
+    world_3d_path: str,
+    world_mcap_path: str,
+) -> dict:
+    """Transform the filtered keypoints and write the world-frame mcaps.
+
+    ``head_points`` is ``(frames, hands, keypoints, 3)`` in the published
+    (post-``rotate_points_around_z``) convention; the trajectory conversion
+    undoes that convention before applying the pose.
+    """
+    head_points = np.asarray(head_points, dtype=float)
+    frame_timestamps = np.asarray(frame_timestamps, dtype=np.int64)
+    world_points = trajectory.transform_points(head_points, frame_timestamps)
+
+    write_3d_hand_keypoints_mcap(
+        world_points,
+        [int(value) for value in frame_timestamps],
+        world_3d_path,
+    )
+    safe_merge_mcaps(list(hand_2d_paths) + [world_3d_path], world_mcap_path)
+    return {
+        "frames": int(world_points.shape[0]),
+        "world_stability": world_stability_qc(world_points, frame_timestamps),
+    }
 
 def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False,timestamps=None):
     #read camera parameters
@@ -847,7 +529,25 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False,timestamps=No
 
 
 
-def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestamps=None, visualize=False):
+def handpose3d(
+    streams,
+    output_path,
+    cam_3d_ids = [1, 4],
+    imu_pts=None,
+    timestamps=None,
+    visualize=False,
+    pose_task: PoseTask | None = None,
+    pose_trajectory: PoseTrajectory | None = None,
+    world_mcap_path: str | None = None,
+    qc_path: str | None = None,
+):
+    """Detect hands, triangulate them and (optionally) fuse a VIO trajectory.
+
+    The head-frame outputs are always written exactly as before.  When a VIO
+    trajectory is supplied (directly or through ``pose_task``), the Kalman
+    filtered keypoints are additionally expressed in the VIO world frame after
+    the filtering stage, so the hand shape is never distorted by the fusion.
+    """
     input_streams = streams
 
     kpts_cam, kpts_3d = run_mp(input_streams, None, None, cam_3d_ids, visualize, timestamps)
@@ -865,9 +565,47 @@ def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestam
     write_3d_hand_keypoints_mcap(kpts_3d, timestamps, 'processed_data/hand_keypoints_3d.mcap')
     for i, kpts_2d in enumerate(kpts_cam):
         write_2d_hand_keypoints_mcap(kpts_2d, timestamps, f"/robot0/sensor/camera{i}/pre/hand_keypoints2d", f'processed_data/hand_keypoints_2d_cam{i}.mcap')
-    file_paths = [f'processed_data/hand_keypoints_2d_cam{i}.mcap' for i in range(len(kpts_cam))] + ['processed_data/hand_keypoints_3d.mcap']
+    hand_2d_paths = [f'processed_data/hand_keypoints_2d_cam{i}.mcap' for i in range(len(kpts_cam))]
+    file_paths = hand_2d_paths + ['processed_data/hand_keypoints_3d.mcap']
     # Use safe_merge_mcaps instead of PyMCAP.merge to avoid corrupting files via raw append
     safe_merge_mcaps(file_paths, output_path)
+
+    # ---- optional VIO fusion -------------------------------------------------
+    trajectory, vio_status = _resolve_trajectory(pose_task, pose_trajectory)
+
+    world_mcap = None
+    qc_report: dict = {"vio": vio_status}
+    if trajectory is not None:
+        frame_count = min(len(kpts_3d), len(timestamps) if timestamps is not None else 0)
+        if frame_count == 0:
+            print("[vio] no frames available for the world transform")
+        else:
+            if len(kpts_3d) != frame_count:
+                print(
+                    f"[vio] {len(kpts_3d) - frame_count} frames have no timestamp; "
+                    "truncating the world output"
+                )
+            head_points = np.asarray(kpts_3d[:frame_count], dtype=float)
+            frame_timestamps = np.asarray(timestamps[:frame_count], dtype=np.int64)
+
+            world_3d_path = 'processed_data/hand_keypoints_3d_world.mcap'
+            world_mcap = world_mcap_path or 'mcap_output/hand_keypoints_world.mcap'
+            qc_report.update(
+                _write_world_outputs(
+                    head_points,
+                    frame_timestamps,
+                    trajectory,
+                    hand_2d_paths,
+                    world_3d_path,
+                    world_mcap,
+                )
+            )
+            print(f"[vio] world-frame hand keypoints -> {world_mcap}")
+    elif pose_task is not None or pose_trajectory is not None:
+        print("[vio] no trajectory available; wrote head-frame output only")
+    if qc_path:
+        update_qc_json(qc_path, qc_report)
+
     # Delete the individual files after merging
     file_paths = [f'processed_data/hand_keypoints_2d_cam{i}.mcap' for i in range(len(kpts_cam))]
     for file_path in file_paths:
@@ -877,6 +615,14 @@ def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestam
             print(f"Error: {file_path} does not exist.")
         except PermissionError:
             print(f"Error: You do not have permission to delete {file_path}.")
+
+    return {
+        "head_mcap": output_path,
+        "world_mcap": world_mcap,
+        "frames": int(len(kpts_3d)),
+        "vio": vio_status,
+        "qc": qc_report,
+    }
 
 if __name__ == '__main__':
 
