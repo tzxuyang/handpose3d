@@ -1,9 +1,11 @@
 import os
-
 import cv2 as cv
 import mediapipe as mp
 import numpy as np
 import sys
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0,project_root)
+
 from mcap_utils import construct_2d_hand_keypoints_msg, read_mcap_protobuf, construct_3d_hand_keypoints_msg, write_2d_hand_keypoints_mcap, write_3d_hand_keypoints_mcap, safe_merge_mcaps
 from imu_calculation import calculate_position_from_imu
 from utils import (
@@ -15,6 +17,7 @@ from utils import (
     unproject_pixel,
     rotate_points_around_z,
 )
+
 from pymcap import PyMCAP
 from pathlib import Path
 from tools.kalman_filter_3d import Hand3DKalmanFilter
