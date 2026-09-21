@@ -1,1 +1,6 @@
 figs/*
+__pycache__/
+*.pyc
+basalt/
+/.deps/
+/.venv/
