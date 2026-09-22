@@ -1,9 +1,11 @@
 import os
-
 import cv2 as cv
 import mediapipe as mp
 import numpy as np
 import sys
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0,project_root)
+
 from mcap_utils import construct_2d_hand_keypoints_msg, read_mcap_protobuf, construct_3d_hand_keypoints_msg, write_2d_hand_keypoints_mcap, write_3d_hand_keypoints_mcap, safe_merge_mcaps
 from imu_calculation import calculate_position_from_imu
 from utils import (
@@ -15,8 +17,17 @@ from utils import (
     unproject_pixel,
     rotate_points_around_z,
 )
+
 from pymcap import PyMCAP
 from pathlib import Path
+from tools.kalman_filter_3d import Hand3DKalmanFilter
+from show_hands import hand_points_to_mp_landmarks
+from mediapipe.framework.formats import landmark_pb2
+from tools.detect_hand import _get_hand_slot
+from tools.oneEuroFilter import Hand2DOneEuro
+from vio.pipeline import PoseTask
+from vio.qc import update_qc_json, world_stability_qc
+from vio.trajectory import PoseTrajectory
 
 mp_drawing = mp.solutions.drawing_utils
 mp_hands = mp.solutions.hands
@@ -31,40 +42,44 @@ RED = (0, 0, 255)
 def _empty_frame_keypoints(num_hands, point_dim):
     return [[[-1] * point_dim for _ in range(NUM_HAND_KEYPOINTS)] for _ in range(num_hands)]
 
-
-def _get_hand_slot(results, detected_index, filled_slots):
-    if results.multi_handedness and detected_index < len(results.multi_handedness):
-        label = results.multi_handedness[detected_index].classification[0].label
-        if label in HAND_LABELS:
-            preferred_slot = HAND_LABELS.index(label)
-            if preferred_slot not in filled_slots:
-                return preferred_slot
-
-    for slot in range(len(HAND_LABELS)):
-        if slot not in filled_slots:
-            return slot
-
-    return None
+def get_physical_hand_label(mp_label):
+    """Media Pipe hypothesis that the input is mirrored. But the DAS ego's input is not mirrored, so we need to swap the labels."""
+    if mp_label == "Right":
+        return "Left"
+    elif mp_label == "Left":
+        return "Right"
+    return mp_label
 
 
-def _extract_frame_keypoints(results, frame, point_dim):
+def _extract_frame_keypoints(results, frame, point_dim, previous_wrists):
     frame_keypoints = _empty_frame_keypoints(len(HAND_LABELS), point_dim)
 
     if not results.multi_hand_landmarks:
         return frame_keypoints
 
-    filled_slots = set()
+    assignments = _get_hand_slot(results, frame.shape, previous_wrists)
+
     for detected_index, hand_landmarks in enumerate(results.multi_hand_landmarks):
-        hand_slot = _get_hand_slot(results, detected_index, filled_slots)
-        if hand_slot is None:
+        
+
+        if detected_index not in assignments:
             continue
 
-        filled_slots.add(hand_slot)
+        hand_slot = assignments[detected_index]
+
         for p in range(NUM_HAND_KEYPOINTS):
             pxl_x = int(round(frame.shape[1] * hand_landmarks.landmark[p].x))
             pxl_y = int(round(frame.shape[0] * hand_landmarks.landmark[p].y))
             frame_keypoints[hand_slot][p] = [pxl_x, pxl_y]
+        
+    # for hand_slot in range(len(HAND_LABELS)):
+    #     wrist_point = frame_keypoints[hand_slot][0]
 
+    #     if wrist_point[0] != -1:
+    #         previous_wrists[hand_slot] = np.array(
+    #             wrist_point,
+    #             dtype=float
+    #         )
     return frame_keypoints
 
 
@@ -116,7 +131,53 @@ def _filter_hand_points_3d(hand_points_3d):
     return filtered_points
 
 
-def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
+def _resolve_trajectory(
+    pose_task: PoseTask | None,
+    pose_trajectory: PoseTrajectory | None,
+) -> tuple[PoseTrajectory | None, str]:
+    """Return the trajectory to fuse with, plus a status string for QC."""
+    if pose_trajectory is not None:
+        return pose_trajectory, "provided"
+    if pose_task is None:
+        return None, "not requested"
+    result = pose_task.get()
+    status = f"{result.status}: {result.message}"
+    if result.ok:
+        return result.trajectory, status
+    print(f"[vio] world-frame output skipped ({status})")
+    return None, status
+
+
+def _write_world_outputs(
+    head_points,
+    frame_timestamps,
+    trajectory: PoseTrajectory,
+    hand_2d_paths,
+    world_3d_path: str,
+    world_mcap_path: str,
+) -> dict:
+    """Transform the filtered keypoints and write the world-frame mcaps.
+
+    ``head_points`` is ``(frames, hands, keypoints, 3)`` in the published
+    (post-``rotate_points_around_z``) convention; the trajectory conversion
+    undoes that convention before applying the pose.
+    """
+    head_points = np.asarray(head_points, dtype=float)
+    frame_timestamps = np.asarray(frame_timestamps, dtype=np.int64)
+    world_points = trajectory.transform_points(head_points, frame_timestamps)
+
+    write_3d_hand_keypoints_mcap(
+        world_points,
+        [int(value) for value in frame_timestamps],
+        world_3d_path,
+    )
+    safe_merge_mcaps(list(hand_2d_paths) + [world_3d_path], world_mcap_path)
+    return {
+        "frames": int(world_points.shape[0]),
+        "world_stability": world_stability_qc(world_points, frame_timestamps),
+    }
+
+def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False,timestamps=None):
     #read camera parameters
     cmtx0, dist0, distortion_model0 = read_camera_parameters(0)
     cmtx1, dist1, distortion_model1 = read_camera_parameters(1)
@@ -141,7 +202,53 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
     kpts_cam = []
     for i in range(len(hands)):
         kpts_cam.append([])
+    
     kpts_3d = []
+    
+    # containers for previous wrist positions for temporal matching
+    max_wrist_age_frames = 10
+    previous_wrist_frames = {
+        cam_id: [None, None]
+        for cam_id in range(len(input_streams))
+    }
+    previous_wrists = {
+        cam_id: [
+            None,   # Left slot
+            None,   # Right slot
+        ]
+        for cam_id in range(len(input_streams))
+    }
+
+    #2d one euro filter
+    hand_smoothers = [
+        Hand2DOneEuro(freq=30.0)
+        for _ in input_streams
+    ]
+
+    #3d kalman filter
+    # Initialize Kalman filters for right and left hands
+    right_hand_kalman = Hand3DKalmanFilter(
+        num_points=NUM_HAND_KEYPOINTS,
+    )
+
+    left_hand_kalman = Hand3DKalmanFilter(
+        num_points=NUM_HAND_KEYPOINTS,
+    )
+
+
+
+    #3d point missing frame cache
+    max_missing_3d_frames = 10
+    last_valid_3d = np.full(
+        (len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3),
+        -1.0,
+        dtype=float,
+    )
+
+    missing_3d = np.zeros(
+        (len(HAND_LABELS), NUM_HAND_KEYPOINTS),
+        dtype=int,
+    )
 
     frame_idx = 0
     while True:
@@ -173,18 +280,73 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
                 results.append(results[-1] if results else None)
 
         #prepare list of hand keypoints of this frame
+        display_keypoints = []
+        measured_keypoints = []
+
+        frame_timestamps = frame_idx / 30.0
+        
         #frame0 kpts
+        # for i in range(len(input_streams)):
+        #     if frame[i] is not None:
+        #         frame_keypoints = _extract_frame_keypoints(results[i], frame[i], point_dim=2, previous_wrists=previous_wrists[i])
+
+        #     else:
+        #         frame_keypoints = _empty_frame_keypoints(len(HAND_LABELS), point_dim=2)
+
+        #     kpts_cam[i].append(frame_keypoints)
         for i in range(len(input_streams)):
-            if frame[i] is not None:
-                frame_keypoints = _extract_frame_keypoints(results[i], frame[i], point_dim=2)
-                kpts_cam[i].append(frame_keypoints)
+            # before processing the current frame, check if any previous wrist positions have expired
+            for slot in range(len(HAND_LABELS)):
+                last_seen = previous_wrist_frames[i][slot]
+
+                if (
+                    last_seen is None
+                    or frame_idx - last_seen > max_wrist_age_frames
+                ):
+                    previous_wrists[i][slot] = None
+                    previous_wrist_frames[i][slot] = None
+
+            if frame[i] is not None and results[i] is not None:
+                frame_keypoints = _extract_frame_keypoints(
+                    results[i],
+                    frame[i],
+                    point_dim=2,
+                    previous_wrists=previous_wrists[i],
+                )
             else:
-                kpts_cam[i].append(_empty_frame_keypoints(len(HAND_LABELS), point_dim=2))
+                frame_keypoints = _empty_frame_keypoints(
+                    len(HAND_LABELS),
+                    point_dim=2,
+                )
+
+            for slot in range(len(HAND_LABELS)):
+                wrist = np.asarray(frame_keypoints[slot][0], dtype=float)
+
+                if np.isfinite(wrist).all() and np.all(wrist != -1):
+                    previous_wrists[i][slot] = wrist.copy()
+                    previous_wrist_frames[i][slot] = frame_idx
+
+            kpts_cam[i].append(frame_keypoints)
+
+            #apply one euro filter
+            measured_points, display_points = hand_smoothers[i].update(
+                frame_keypoints,
+                frame_timestamps,
+            )
+            display_keypoints.append(display_points)
+            measured_keypoints.append(measured_points)
+        
+
+        print('display keypoints: ', display_keypoints[cam_ids[0]], display_keypoints[cam_ids[1]])
+        print("displaypoint type", np.asarray(display_keypoints).shape)
+        print("kpts type : ", np.asarray(kpts_cam).shape)
+
 
         #calculate 3d position
         frame_p3ds = []
         
-        for hand0_keypoints, hand1_keypoints in zip(kpts_cam[cam_ids[0]][-1], kpts_cam[cam_ids[1]][-1]):
+        # for hand0_keypoints, hand1_keypoints in zip(kpts_cam[cam_ids[0]][-1], kpts_cam[cam_ids[1]][-1]):
+        for hand0_keypoints, hand1_keypoints in zip(measured_keypoints[cam_ids[0]], measured_keypoints[cam_ids[1]]):
             hand0_rays = _unproject_hand_keypoints(hand0_keypoints, cmtx0, dist0, distortion_model0)
             hand1_rays = _unproject_hand_keypoints(hand1_keypoints, cmtx1, dist1, distortion_model1)
 
@@ -207,8 +369,49 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         This contains the 3d position of each keypoint in current frame.
         For real time application, this is what you want.
         '''
-        frame_p3ds = np.array(frame_p3ds).reshape((len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3))
-        kpts_3d.append(frame_p3ds)
+        # frame_p3ds = np.array(frame_p3ds).reshape((len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3))
+        measured_p3ds = np.asarray(frame_p3ds, dtype=float).reshape(
+            len(HAND_LABELS), NUM_HAND_KEYPOINTS, 3
+        )
+
+        dt = 1.0 / 30.0
+        if timestamps is not None and 0 < frame_idx < len(timestamps):
+            timestamp_delta_ns = (
+                int(timestamps[frame_idx])
+                - int(timestamps[frame_idx - 1])
+            )
+            measured_dt = timestamp_delta_ns * 1e-9
+
+            if 0.0 < measured_dt <= 0.1:
+                dt = measured_dt
+
+
+        measured_p3ds[0] = left_hand_kalman.update(measured_p3ds[0], dt)
+        measured_p3ds[1] = right_hand_kalman.update(measured_p3ds[1], dt)
+
+
+
+        observed_3d = (
+            np.isfinite(measured_p3ds).all(axis=-1)
+            & ~np.all(measured_p3ds == -1.0, axis=-1)
+        )
+
+        #update missing frame count and last valid 3d point cache
+        missing_3d[observed_3d] = 0
+        missing_3d[~observed_3d] += 1
+
+        last_valid_3d[observed_3d] = measured_p3ds[observed_3d]
+
+        expired = missing_3d > max_missing_3d_frames
+        last_valid_3d[expired] = -1.0
+
+        display_p3ds = last_valid_3d.copy()
+
+        kpts_3d.append(display_p3ds)
+
+
+
+
 
         # Draw the hand annotations on the image.
         frame[cam_ids[0]].flags.writeable = True
@@ -216,19 +419,97 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
         frame[cam_ids[0]] = cv.cvtColor(frame[cam_ids[0]], cv.COLOR_RGB2BGR)
         frame[cam_ids[1]] = cv.cvtColor(frame[cam_ids[1]], cv.COLOR_RGB2BGR)
 
-        if results[cam_ids[0]].multi_hand_landmarks:
-          for i, hand_landmarks in enumerate(results[cam_ids[0]].multi_hand_landmarks):
-            if i == 0:
-                mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
-            else:
-                mp_drawing.draw_landmarks(frame[cam_ids[0]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+        # if results[cam_ids[0]].multi_hand_landmarks:
+        #     for i, hand_landmarks in enumerate(results[cam_ids[0]].multi_hand_landmarks):
 
-        if results[cam_ids[1]].multi_hand_landmarks:
-          for i, hand_landmarks in enumerate(results[cam_ids[1]].multi_hand_landmarks):
-            if i == 0:
-                mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=RED))
-            else:
-                mp_drawing.draw_landmarks(frame[cam_ids[1]], hand_landmarks, mp_hands.HAND_CONNECTIONS, mp_drawing.DrawingSpec(color=BLUE))
+        #         handedness = results[cam_ids[0]].multi_handedness[i]
+        #         classification = handedness.classification[0]
+
+        #         mp_label = classification.label
+        #         score = classification.score
+
+        #         physical_label = get_physical_hand_label(mp_label)
+
+        #         if physical_label == "Right":
+        #             color = RED
+        #         elif physical_label == "Left":
+        #             color = BLUE
+
+        #         mp_drawing.draw_landmarks(
+        #             frame[cam_ids[0]],
+        #             hand_landmarks,
+        #             mp_hands.HAND_CONNECTIONS,
+        #             mp_drawing.DrawingSpec(color=color),
+        #         )
+
+        # for hand_idx, hand_keypoints in enumerate(frame_keypoints):
+        #     if hand_idx == 0:
+        #         color = BLUE
+        #     else:
+        #         color = RED
+
+
+        # if results[cam_ids[1]].multi_hand_landmarks:
+        #     for i, hand_landmarks in enumerate(results[cam_ids[1]].multi_hand_landmarks):
+
+        #         handedness = results[cam_ids[1]].multi_handedness[i]
+        #         classification = handedness.classification[0]
+
+        #         mp_label = classification.label
+        #         score = classification.score
+        #         physical_label = get_physical_hand_label(mp_label)
+
+        #         if physical_label == "Right":
+        #             color = RED
+        #         elif physical_label == "Left":
+        #             color = BLUE
+
+        #         mp_drawing.draw_landmarks(
+        #             frame[cam_ids[1]],
+        #             hand_landmarks,
+        #             mp_hands.HAND_CONNECTIONS,
+        #             mp_drawing.DrawingSpec(color=color),
+                # )
+        for cam_id in cam_ids:
+
+            # current_handpoints = kpts_cam[cam_id][-1]
+            current_handpoints = display_keypoints[cam_id]
+
+            for hand_idx, hand_keypoints in enumerate(
+                current_handpoints
+            ):
+                hand_keypoints = np.asarray(
+                    hand_keypoints,
+                    dtype=float
+                )
+
+                # 当前 hand 没有检测到
+                if np.all(hand_keypoints[:, 0] == -1):
+                    continue
+
+                # hand_idx 已经是 _get_hand_slot() 整理后的 slot
+                label = HAND_LABELS[hand_idx]
+
+                if label == "Left":
+                    color = BLUE
+                elif label == "Right":
+                    color = RED
+                else:
+                    continue
+
+                hand_landmarks = hand_points_to_mp_landmarks(
+                    hand_keypoints,
+                    frame[cam_id].shape
+                )
+
+                mp_drawing.draw_landmarks(
+                    frame[cam_id],
+                    hand_landmarks,
+                    mp_hands.HAND_CONNECTIONS,
+                    mp_drawing.DrawingSpec(color=color),
+                )
+
+
 
         if visualize:
             cv.imshow('cam1', frame[cam_ids[1]])
@@ -246,10 +527,33 @@ def run_mp(input_streams, P0, P1, cam_ids = [1,4], visualize=False):
 
     return np.array(kpts_cam), np.array(kpts_3d)
 
-def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestamps=None, visualize=False):
+
+
+
+
+
+def handpose3d(
+    streams,
+    output_path,
+    cam_3d_ids = [1, 4],
+    imu_pts=None,
+    timestamps=None,
+    visualize=False,
+    pose_task: PoseTask | None = None,
+    pose_trajectory: PoseTrajectory | None = None,
+    world_mcap_path: str | None = None,
+    qc_path: str | None = None,
+):
+    """Detect hands, triangulate them and (optionally) fuse a VIO trajectory.
+
+    The head-frame outputs are always written exactly as before.  When a VIO
+    trajectory is supplied (directly or through ``pose_task``), the Kalman
+    filtered keypoints are additionally expressed in the VIO world frame after
+    the filtering stage, so the hand shape is never distorted by the fusion.
+    """
     input_streams = streams
 
-    kpts_cam, kpts_3d = run_mp(input_streams, None, None, cam_3d_ids, visualize)
+    kpts_cam, kpts_3d = run_mp(input_streams, None, None, cam_3d_ids, visualize, timestamps)
     
     kpts_cam = np.array(kpts_cam)
 
@@ -264,9 +568,47 @@ def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestam
     write_3d_hand_keypoints_mcap(kpts_3d, timestamps, 'processed_data/hand_keypoints_3d.mcap')
     for i, kpts_2d in enumerate(kpts_cam):
         write_2d_hand_keypoints_mcap(kpts_2d, timestamps, f"/robot0/sensor/camera{i}/pre/hand_keypoints2d", f'processed_data/hand_keypoints_2d_cam{i}.mcap')
-    file_paths = [f'processed_data/hand_keypoints_2d_cam{i}.mcap' for i in range(len(kpts_cam))] + ['processed_data/hand_keypoints_3d.mcap']
+    hand_2d_paths = [f'processed_data/hand_keypoints_2d_cam{i}.mcap' for i in range(len(kpts_cam))]
+    file_paths = hand_2d_paths + ['processed_data/hand_keypoints_3d.mcap']
     # Use safe_merge_mcaps instead of PyMCAP.merge to avoid corrupting files via raw append
     safe_merge_mcaps(file_paths, output_path)
+
+    # ---- optional VIO fusion -------------------------------------------------
+    trajectory, vio_status = _resolve_trajectory(pose_task, pose_trajectory)
+
+    world_mcap = None
+    qc_report: dict = {"vio": vio_status}
+    if trajectory is not None:
+        frame_count = min(len(kpts_3d), len(timestamps) if timestamps is not None else 0)
+        if frame_count == 0:
+            print("[vio] no frames available for the world transform")
+        else:
+            if len(kpts_3d) != frame_count:
+                print(
+                    f"[vio] {len(kpts_3d) - frame_count} frames have no timestamp; "
+                    "truncating the world output"
+                )
+            head_points = np.asarray(kpts_3d[:frame_count], dtype=float)
+            frame_timestamps = np.asarray(timestamps[:frame_count], dtype=np.int64)
+
+            world_3d_path = 'processed_data/hand_keypoints_3d_world.mcap'
+            world_mcap = world_mcap_path or 'mcap_output/hand_keypoints_world.mcap'
+            qc_report.update(
+                _write_world_outputs(
+                    head_points,
+                    frame_timestamps,
+                    trajectory,
+                    hand_2d_paths,
+                    world_3d_path,
+                    world_mcap,
+                )
+            )
+            print(f"[vio] world-frame hand keypoints -> {world_mcap}")
+    elif pose_task is not None or pose_trajectory is not None:
+        print("[vio] no trajectory available; wrote head-frame output only")
+    if qc_path:
+        update_qc_json(qc_path, qc_report)
+
     # Delete the individual files after merging
     file_paths = [f'processed_data/hand_keypoints_2d_cam{i}.mcap' for i in range(len(kpts_cam))]
     for file_path in file_paths:
@@ -276,6 +618,14 @@ def handpose3d(streams, output_path, cam_3d_ids = [1, 4], imu_pts=None, timestam
             print(f"Error: {file_path} does not exist.")
         except PermissionError:
             print(f"Error: You do not have permission to delete {file_path}.")
+
+    return {
+        "head_mcap": output_path,
+        "world_mcap": world_mcap,
+        "frames": int(len(kpts_3d)),
+        "vio": vio_status,
+        "qc": qc_report,
+    }
 
 if __name__ == '__main__':
 

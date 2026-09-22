@@ -1,5 +1,23 @@
 **Real time 3D hand pose estimation using MediaPipe**
 
+**Project setup (Ubuntu 22.04+, x86_64)**
+
+With `uv`, `curl`, and `ffmpeg` (including `ffprobe`) installed:
+
+```bash
+git clone https://github.com/tzxuyang/handpose3d.git && cd handpose3d && bash scripts/bootstrap.sh
+```
+
+For an existing checkout, run `bash scripts/bootstrap.sh`. This installs the
+SHA256-verified Basalt 0.1.7 release under `.deps/basalt/0.1.7/` and runs
+`uv sync --frozen --python 3.10` for the project's `.venv`. It requires network
+access on first setup. Basalt and Python packages are managed separately;
+neither downloaded directory is committed to Git. Shell profiles and system
+packages are not modified. To install/check only Basalt, use
+`bash scripts/bootstrap.sh --basalt-only`. See [VIO setup](docs/vio.md#local-installation)
+for prerequisites and paths. Processing currently opens visualization windows,
+so run it in a desktop session.
+
 This is a demo on how to obtain 3D coordinates of hand keypoints using MediaPipe and two calibrated cameras. Two cameras are required as there is no way to obtain 3D coordinates from a single camera. Check here: [stereo calibrate](https://github.com/TemugeB/python_stereo_camera_calibrate) for a calibration package. Also my blog post on how to stereo calibrate two cameras: [link](https://temugeb.github.io/opencv/python/2021/02/02/stereo-camera-calibration-and-triangulation.html). Alternatively, follow the camera calibration at Opencv documentations: [link](https://docs.opencv.org/3.4/d9/d0c/group__calib3d.html). If you want to know some details on how this code works, take a look at my accompanying blog post here: [link](https://temugeb.github.io/python/computer_vision/2021/06/27/handpose3d.html).
 
 **MediaPipe**  
